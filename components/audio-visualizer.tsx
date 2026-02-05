@@ -477,6 +477,133 @@ function WaveRings({
   )
 }
 
+// Spiral ribbons that shoot outward
+function SpiralRibbons({
+  analyzerData,
+  theme,
+}: {
+  analyzerData: AudioAnalyzerData | null
+  theme: ColorTheme
+}) {
+  const groupRef = useRef<THREE.Group>(null)
+  const ribbonCount = 6
+  const meshesRef = useRef<THREE.Mesh[]>([])
+
+  useFrame((state) => {
+    const time = state.clock.elapsedTime
+    const bass = getBass(analyzerData, time)
+
+    meshesRef.current.forEach((mesh, i) => {
+      if (!mesh) return
+      const angle = (i / ribbonCount) * Math.PI * 2 + time * 0.3
+      const radius = 1.5 + bass * 1.5
+      const x = Math.cos(angle) * radius
+      const z = Math.sin(angle) * radius
+      const y = Math.sin(time * 2 + i * 1.2) * (0.5 + bass)
+
+      mesh.position.set(x, y, z)
+      mesh.rotation.set(time + i, time * 0.5 + i * 0.3, 0)
+      mesh.scale.set(
+        0.08 + bass * 0.12,
+        1 + bass * 3,
+        0.08 + bass * 0.12
+      )
+
+      const mat = mesh.material as THREE.MeshStandardMaterial
+      mat.emissiveIntensity = 0.4 + bass * 1.2
+    })
+
+    if (groupRef.current) {
+      groupRef.current.rotation.y = time * 0.15
+    }
+  })
+
+  return (
+    <group ref={groupRef}>
+      {Array.from({ length: ribbonCount }).map((_, i) => {
+        const t = i / ribbonCount
+        const color = new THREE.Color().lerpColors(
+          new THREE.Color(theme.primary),
+          new THREE.Color(theme.accent),
+          t
+        )
+        return (
+          <mesh
+            key={i}
+            ref={(el) => {
+              if (el) meshesRef.current[i] = el
+            }}
+          >
+            <octahedronGeometry args={[0.5, 0]} />
+            <meshStandardMaterial
+              color={color}
+              emissive={color}
+              emissiveIntensity={0.5}
+              metalness={0.9}
+              roughness={0.1}
+              transparent
+              opacity={0.85}
+            />
+          </mesh>
+        )
+      })}
+    </group>
+  )
+}
+
+// Pulsing outer rings that expand and contract
+function PulseRays({
+  analyzerData,
+  theme,
+}: {
+  analyzerData: AudioAnalyzerData | null
+  theme: ColorTheme
+}) {
+  const raysRef = useRef<THREE.Mesh[]>([])
+  const rayCount = 12
+
+  useFrame((state) => {
+    const time = state.clock.elapsedTime
+    const bass = getBass(analyzerData, time)
+
+    raysRef.current.forEach((mesh, i) => {
+      if (!mesh) return
+      const angle = (i / rayCount) * Math.PI * 2
+      const reach = 3 + bass * 4 + Math.sin(time * 3 + i) * 0.5
+      const x = Math.cos(angle) * reach * 0.5
+      const z = Math.sin(angle) * reach * 0.5
+
+      mesh.position.set(x, 0, z)
+      mesh.rotation.z = angle + Math.PI / 2
+      mesh.scale.set(0.02 + bass * 0.02, reach, 0.02)
+
+      const mat = mesh.material as THREE.MeshBasicMaterial
+      mat.opacity = 0.15 + bass * 0.3
+    })
+  })
+
+  return (
+    <group>
+      {Array.from({ length: rayCount }).map((_, i) => (
+        <mesh
+          key={i}
+          ref={(el) => {
+            if (el) raysRef.current[i] = el
+          }}
+        >
+          <boxGeometry args={[1, 1, 1]} />
+          <meshBasicMaterial
+            color={i % 2 === 0 ? theme.primary : theme.particles}
+            transparent
+            opacity={0.2}
+            blending={THREE.AdditiveBlending}
+          />
+        </mesh>
+      ))}
+    </group>
+  )
+}
+
 // Ground grid plane
 function GroundGrid({
   analyzerData,
@@ -520,10 +647,17 @@ function Scene({
 }) {
   const { camera } = useThree()
 
-  useFrame(() => {
-    camera.position.x = THREE.MathUtils.lerp(camera.position.x, mousePos.x * 3, 0.02)
-    camera.position.y = THREE.MathUtils.lerp(camera.position.y, 4 + mousePos.y * 3, 0.02)
-    camera.lookAt(0, 0, 0)
+  useFrame((state) => {
+    const time = state.clock.elapsedTime
+    const breathe = Math.sin(time * 0.4) * 0.5
+    const targetX = mousePos.x * 4
+    const targetY = 3.5 + mousePos.y * 3 + breathe
+    const targetZ = 9 + Math.sin(time * 0.25) * 1.5
+
+    camera.position.x = THREE.MathUtils.lerp(camera.position.x, targetX, 0.025)
+    camera.position.y = THREE.MathUtils.lerp(camera.position.y, targetY, 0.025)
+    camera.position.z = THREE.MathUtils.lerp(camera.position.z, targetZ, 0.015)
+    camera.lookAt(0, breathe * 0.3, 0)
   })
 
   return (
@@ -538,6 +672,8 @@ function Scene({
       <pointLight position={[0, -3, 0]} intensity={0.4} color={theme.primary} distance={10} />
 
       <CentralOrb analyzerData={analyzerData} theme={theme} />
+      <SpiralRibbons analyzerData={analyzerData} theme={theme} />
+      <PulseRays analyzerData={analyzerData} theme={theme} />
       <InnerRing analyzerData={analyzerData} mousePos={mousePos} theme={theme} />
       <SymmetricBars analyzerData={analyzerData} mousePos={mousePos} theme={theme} />
       <Particles analyzerData={analyzerData} mousePos={mousePos} theme={theme} />
