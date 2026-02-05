@@ -64,12 +64,23 @@ function useAudioAnalyzer(
       const initMic = async () => {
         try {
           const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
-          const audioContext = new AudioContext()
+          const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)()
+          
+          // Resume audio context if it's suspended
+          if (audioContext.state === 'suspended') {
+            await audioContext.resume()
+          }
+          
           const analyser = audioContext.createAnalyser()
           analyser.fftSize = 256
           analyser.smoothingTimeConstant = 0.8
+          analyser.minDecibels = -100
+          analyser.maxDecibels = -10
+          
           const source = audioContext.createMediaStreamSource(stream)
           source.connect(analyser)
+          analyser.connect(audioContext.destination)
+          
           audioContextRef.current = audioContext
           sourceRef.current = source
           setAnalyzerData({ analyser, dataArray: new Uint8Array(analyser.frequencyBinCount) })
@@ -88,10 +99,18 @@ function useAudioAnalyzer(
     }
 
     if (mode === "file" && audioFile) {
-      const audioContext = new AudioContext()
+      const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)()
+      
+      // Resume audio context if it's suspended
+      if (audioContext.state === 'suspended') {
+        audioContext.resume().catch(() => {})
+      }
+      
       const analyser = audioContext.createAnalyser()
       analyser.fftSize = 256
       analyser.smoothingTimeConstant = 0.8
+      analyser.minDecibels = -100
+      analyser.maxDecibels = -10
 
       const audio = new Audio()
       audio.crossOrigin = "anonymous"
