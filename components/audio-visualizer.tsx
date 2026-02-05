@@ -1,5 +1,7 @@
 "use client"
 
+import React from "react"
+
 import { useRef, useMemo, useEffect, useState } from "react"
 import { Canvas, useFrame, useThree, extend } from "@react-three/fiber"
 import * as THREE from "three"
@@ -24,45 +26,98 @@ interface AudioAnalyzerData {
   dataArray: Uint8Array
 }
 
-function useAudioAnalyzer(isListening: boolean): AudioAnalyzerData | null {
+type AudioMode = "off" | "mic" | "file"
+
+function useAudioAnalyzer(
+  mode: AudioMode,
+  audioFile: File | null
+): { analyzerData: AudioAnalyzerData | null; audioElement: HTMLAudioElement | null } {
   const [analyzerData, setAnalyzerData] = useState<AudioAnalyzerData | null>(null)
   const audioContextRef = useRef<AudioContext | null>(null)
+  const audioElementRef = useRef<HTMLAudioElement | null>(null)
+  const sourceRef = useRef<MediaElementAudioSourceNode | MediaStreamAudioSourceNode | null>(null)
+  const fileUrlRef = useRef<string | null>(null)
 
   useEffect(() => {
-    if (!isListening) {
-      if (audioContextRef.current) {
-        audioContextRef.current.close()
-        audioContextRef.current = null
-        setAnalyzerData(null)
+    // Cleanup previous
+    if (audioElementRef.current) {
+      audioElementRef.current.pause()
+      audioElementRef.current.src = ""
+      audioElementRef.current = null
+    }
+    if (fileUrlRef.current) {
+      URL.revokeObjectURL(fileUrlRef.current)
+      fileUrlRef.current = null
+    }
+    if (audioContextRef.current) {
+      audioContextRef.current.close()
+      audioContextRef.current = null
+    }
+    sourceRef.current = null
+    setAnalyzerData(null)
+
+    if (mode === "off") return
+
+    if (mode === "mic") {
+      const initMic = async () => {
+        try {
+          const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+          const audioContext = new AudioContext()
+          const analyser = audioContext.createAnalyser()
+          analyser.fftSize = 256
+          analyser.smoothingTimeConstant = 0.8
+          const source = audioContext.createMediaStreamSource(stream)
+          source.connect(analyser)
+          audioContextRef.current = audioContext
+          sourceRef.current = source
+          setAnalyzerData({ analyser, dataArray: new Uint8Array(analyser.frequencyBinCount) })
+        } catch (err) {
+          console.error("Error accessing microphone:", err)
+        }
       }
-      return
+      initMic()
     }
 
-    const initAudio = async () => {
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
-        const audioContext = new AudioContext()
-        const analyser = audioContext.createAnalyser()
-        analyser.fftSize = 256
-        analyser.smoothingTimeConstant = 0.8
-        const source = audioContext.createMediaStreamSource(stream)
-        source.connect(analyser)
-        const dataArray = new Uint8Array(analyser.frequencyBinCount)
-        audioContextRef.current = audioContext
-        setAnalyzerData({ analyser, dataArray })
-      } catch (err) {
-        console.error("Error accessing microphone:", err)
-      }
+    if (mode === "file" && audioFile) {
+      const audioContext = new AudioContext()
+      const analyser = audioContext.createAnalyser()
+      analyser.fftSize = 256
+      analyser.smoothingTimeConstant = 0.8
+
+      const audio = new Audio()
+      audio.crossOrigin = "anonymous"
+      const url = URL.createObjectURL(audioFile)
+      fileUrlRef.current = url
+      audio.src = url
+      audio.loop = true
+
+      const source = audioContext.createMediaElementSource(audio)
+      source.connect(analyser)
+      analyser.connect(audioContext.destination)
+
+      audioContextRef.current = audioContext
+      sourceRef.current = source
+      audioElementRef.current = audio
+
+      audio.play().catch((err) => console.error("Error playing file:", err))
+      setAnalyzerData({ analyser, dataArray: new Uint8Array(analyser.frequencyBinCount) })
     }
-    initAudio()
+
     return () => {
+      if (audioElementRef.current) {
+        audioElementRef.current.pause()
+        audioElementRef.current.src = ""
+      }
+      if (fileUrlRef.current) {
+        URL.revokeObjectURL(fileUrlRef.current)
+      }
       if (audioContextRef.current) {
         audioContextRef.current.close()
       }
     }
-  }, [isListening])
+  }, [mode, audioFile])
 
-  return analyzerData
+  return { analyzerData, audioElement: audioElementRef.current }
 }
 
 function getFrequencies(analyzerData: AudioAnalyzerData | null, count: number, time: number): number[] {
@@ -866,10 +921,40 @@ function Scene({
 }
 
 export default function AudioVisualizer() {
-  const [isListening, setIsListening] = useState(false)
+  const [audioMode, setAudioMode] = useState<AudioMode>("off")
+  const [audioFile, setAudioFile] = useState<File | null>(null)
+  const [fileName, setFileName] = useState<string | null>(null)
   const [mousePos, setMousePos] = useState({ x: 0, y: 0 })
   const [theme, setTheme] = useState<ColorTheme>(COLOR_THEMES[0])
-  const analyzerData = useAudioAnalyzer(isListening)
+  const fileInputRef = useRef<HTMLInputElement>(null)
+  const { analyzerData } = useAudioAnalyzer(audioMode, audioFile)
+  const [isListening, setIsListening] = useState(false)
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (file) {
+      setAudioFile(file)
+      setFileName(file.name)
+      setAudioMode("file")
+    }
+  }
+
+  const toggleMic = () => {
+    if (audioMode === "mic") {
+      setAudioMode("off")
+    } else {
+      setAudioFile(null)
+      setFileName(null)
+      setAudioMode("mic")
+    }
+  }
+
+  const stopAudio = () => {
+    setAudioMode("off")
+    setAudioFile(null)
+    setFileName(null)
+    if (fileInputRef.current) fileInputRef.current.value = ""
+  }
 
   useEffect(() => {
     const handleMouseMove = (e: MouseEvent) => {
@@ -893,15 +978,6 @@ export default function AudioVisualizer() {
       </Canvas>
 
       <div className="absolute inset-0 pointer-events-none">
-        <div className="absolute top-8 left-1/2 -translate-x-1/2 text-center">
-          <h1 className="text-4xl font-bold tracking-tight text-white mb-1 drop-shadow-lg">
-            Audio Visualizer
-          </h1>
-          <p className="text-white/40 text-sm tracking-wide">
-            Move your mouse to interact
-          </p>
-        </div>
-
         <div className="absolute top-8 right-8 flex gap-2 pointer-events-auto">
           {COLOR_THEMES.map((t) => (
             <button
@@ -922,30 +998,62 @@ export default function AudioVisualizer() {
           ))}
         </div>
 
-        <div className="absolute bottom-8 left-1/2 -translate-x-1/2 pointer-events-auto">
-          <button
-            onClick={() => setIsListening(!isListening)}
-            className="px-8 py-4 rounded-full font-semibold text-lg transition-all duration-300 backdrop-blur-sm"
-            style={
-              isListening
-                ? { backgroundColor: theme.primary, color: "#fff", boxShadow: `0 0 30px ${theme.primary}80` }
-                : { backgroundColor: "rgba(255,255,255,0.08)", color: "#fff" }
-            }
-          >
-            {isListening ? "Stop Listening" : "Start Microphone"}
-          </button>
-        </div>
-
-        {isListening && (
-          <div className="absolute bottom-28 left-1/2 -translate-x-1/2">
-            <div className="flex items-center gap-2">
-              <span className="w-3 h-3 rounded-full animate-pulse" style={{ backgroundColor: theme.primary }} />
-              <span className="text-sm font-medium" style={{ color: theme.primary }}>
-                Listening to microphone
+        <div className="absolute bottom-8 left-1/2 -translate-x-1/2 pointer-events-auto flex flex-col items-center gap-3">
+          {/* Status indicator */}
+          {audioMode !== "off" && (
+            <div className="flex items-center gap-2 mb-1">
+              <span className="w-2.5 h-2.5 rounded-full animate-pulse" style={{ backgroundColor: theme.primary }} />
+              <span className="text-sm font-medium text-white/80">
+                {audioMode === "mic" ? "Listening to microphone" : fileName}
               </span>
             </div>
+          )}
+
+          {/* Control buttons */}
+          <div className="flex items-center gap-3">
+            <button
+              onClick={toggleMic}
+              className="px-6 py-3 rounded-full font-semibold text-sm transition-all duration-300 backdrop-blur-sm"
+              style={
+                audioMode === "mic"
+                  ? { backgroundColor: theme.primary, color: "#fff", boxShadow: `0 0 24px ${theme.primary}60` }
+                  : { backgroundColor: "rgba(255,255,255,0.08)", color: "#fff" }
+              }
+            >
+              {audioMode === "mic" ? "Mic On" : "Microphone"}
+            </button>
+
+            <button
+              onClick={() => fileInputRef.current?.click()}
+              className="px-6 py-3 rounded-full font-semibold text-sm transition-all duration-300 backdrop-blur-sm"
+              style={
+                audioMode === "file"
+                  ? { backgroundColor: theme.accent, color: "#fff", boxShadow: `0 0 24px ${theme.accent}60` }
+                  : { backgroundColor: "rgba(255,255,255,0.08)", color: "#fff" }
+              }
+            >
+              {audioMode === "file" ? "Playing" : "Upload MP3"}
+            </button>
+
+            {audioMode !== "off" && (
+              <button
+                onClick={stopAudio}
+                className="px-6 py-3 rounded-full font-semibold text-sm transition-all duration-300 backdrop-blur-sm"
+                style={{ backgroundColor: "rgba(255,255,255,0.08)", color: "#fff" }}
+              >
+                Stop
+              </button>
+            )}
           </div>
-        )}
+
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept="audio/*"
+            onChange={handleFileChange}
+            className="hidden"
+          />
+        </div>
       </div>
     </div>
   )
