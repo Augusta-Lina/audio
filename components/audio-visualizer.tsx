@@ -28,19 +28,25 @@ interface AudioAnalyzerData {
 
 type AudioMode = "off" | "mic" | "file"
 
-function useAudioAnalyzer(
-  mode: AudioMode,
-  audioFile: File | null
-): { analyzerData: AudioAnalyzerData | null; audioElement: HTMLAudioElement | null; error?: string } {
+function useAudioAnalyzer(): {
+  analyzerData: AudioAnalyzerData | null
+  audioElement: HTMLAudioElement | null
+  error?: string
+  startMic: () => void
+  startFile: (file: File) => void
+  stop: () => void
+  audioMode: AudioMode
+} {
   const [analyzerData, setAnalyzerData] = useState<AudioAnalyzerData | null>(null)
   const [error, setError] = useState<string>()
+  const [audioMode, setAudioMode] = useState<AudioMode>("off")
   const audioContextRef = useRef<AudioContext | null>(null)
   const audioElementRef = useRef<HTMLAudioElement | null>(null)
   const sourceRef = useRef<MediaElementAudioSourceNode | MediaStreamAudioSourceNode | null>(null)
+  const streamRef = useRef<MediaStream | null>(null)
   const fileUrlRef = useRef<string | null>(null)
 
-  useEffect(() => {
-    // Cleanup previous
+  const cleanup = () => {
     if (audioElementRef.current) {
       audioElementRef.current.pause()
       audioElementRef.current.src = ""
@@ -50,6 +56,10 @@ function useAudioAnalyzer(
       URL.revokeObjectURL(fileUrlRef.current)
       fileUrlRef.current = null
     }
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach((t) => t.stop())
+      streamRef.current = null
+    }
     if (audioContextRef.current) {
       audioContextRef.current.close()
       audioContextRef.current = null
@@ -57,64 +67,65 @@ function useAudioAnalyzer(
     sourceRef.current = null
     setAnalyzerData(null)
     setError(undefined)
+  }
 
-    if (mode === "off") return
-
-    if (mode === "mic") {
-      const initMic = async () => {
-        try {
-          const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
-          const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)()
-          
-          // Resume audio context if it's suspended
-          if (audioContext.state === 'suspended') {
-            await audioContext.resume()
-          }
-          
-          const analyser = audioContext.createAnalyser()
-          analyser.fftSize = 256
-          analyser.smoothingTimeConstant = 0.8
-          analyser.minDecibels = -100
-          analyser.maxDecibels = -10
-          
-          const source = audioContext.createMediaStreamSource(stream)
-          source.connect(analyser)
-          analyser.connect(audioContext.destination)
-          
-          audioContextRef.current = audioContext
-          sourceRef.current = source
-          setAnalyzerData({ analyser, dataArray: new Uint8Array(analyser.frequencyBinCount) })
-        } catch (err: any) {
-          console.error("Error accessing microphone:", err)
-          if (err.name === "NotAllowedError") {
-            setError("Microphone permission denied. Please allow access in your browser settings.")
-          } else if (err.name === "NotFoundError") {
-            setError("No microphone found. Please check your device.")
-          } else {
-            setError("Unable to access microphone. Please try uploading an audio file instead.")
-          }
-        }
-      }
-      initMic()
-    }
-
-    if (mode === "file" && audioFile) {
+  // Called directly from a click handler so getUserMedia has user-gesture context
+  const startMic = async () => {
+    cleanup()
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
       const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)()
-      
-      // Resume audio context if it's suspended
-      if (audioContext.state === 'suspended') {
-        audioContext.resume().catch(() => {})
+
+      if (audioContext.state === "suspended") {
+        await audioContext.resume()
       }
-      
+
       const analyser = audioContext.createAnalyser()
       analyser.fftSize = 256
-      analyser.smoothingTimeConstant = 0.8
-      analyser.minDecibels = -100
+      analyser.smoothingTimeConstant = 0.75
+      analyser.minDecibels = -90
+      analyser.maxDecibels = -10
+
+      const source = audioContext.createMediaStreamSource(stream)
+      source.connect(analyser)
+      // Don't connect mic analyser to destination to avoid feedback
+
+      audioContextRef.current = audioContext
+      sourceRef.current = source
+      streamRef.current = stream
+      setAnalyzerData({ analyser, dataArray: new Uint8Array(analyser.frequencyBinCount) })
+      setAudioMode("mic")
+    } catch (err: any) {
+      console.error("Error accessing microphone:", err)
+      if (err.name === "NotAllowedError") {
+        setError("Microphone permission denied. Please allow access in your browser settings.")
+      } else if (err.name === "NotFoundError") {
+        setError("No microphone found. Please check your device.")
+      } else {
+        setError("Unable to access microphone. Please try uploading an audio file instead.")
+      }
+    }
+  }
+
+  // Called directly from the file-input onChange handler (user gesture)
+  const startFile = async (file: File) => {
+    cleanup()
+    try {
+      const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)()
+
+      if (audioContext.state === "suspended") {
+        await audioContext.resume()
+      }
+
+      const analyser = audioContext.createAnalyser()
+      analyser.fftSize = 256
+      analyser.smoothingTimeConstant = 0.75
+      analyser.minDecibels = -90
       analyser.maxDecibels = -10
 
       const audio = new Audio()
       audio.crossOrigin = "anonymous"
-      const url = URL.createObjectURL(audioFile)
+      const url = URL.createObjectURL(file)
       fileUrlRef.current = url
       audio.src = url
       audio.loop = true
@@ -127,25 +138,26 @@ function useAudioAnalyzer(
       sourceRef.current = source
       audioElementRef.current = audio
 
-      audio.play().catch((err) => console.error("Error playing file:", err))
+      // play() is called within the same user-gesture call stack
+      await audio.play()
       setAnalyzerData({ analyser, dataArray: new Uint8Array(analyser.frequencyBinCount) })
+      setAudioMode("file")
+    } catch (err: any) {
+      console.error("Error playing file:", err)
+      setError("Unable to play audio file. Please try another file.")
     }
+  }
 
-    return () => {
-      if (audioElementRef.current) {
-        audioElementRef.current.pause()
-        audioElementRef.current.src = ""
-      }
-      if (fileUrlRef.current) {
-        URL.revokeObjectURL(fileUrlRef.current)
-      }
-      if (audioContextRef.current) {
-        audioContextRef.current.close()
-      }
-    }
-  }, [mode, audioFile])
+  const stop = () => {
+    cleanup()
+    setAudioMode("off")
+  }
 
-  return { analyzerData, audioElement: audioElementRef.current, error }
+  useEffect(() => {
+    return () => cleanup()
+  }, [])
+
+  return { analyzerData, audioElement: audioElementRef.current, error, startMic, startFile, stop, audioMode }
 }
 
 function getFrequencies(analyzerData: AudioAnalyzerData | null, count: number, time: number): number[] {
@@ -949,14 +961,11 @@ function Scene({
 }
 
 export default function AudioVisualizer() {
-  const [audioMode, setAudioMode] = useState<AudioMode>("off")
-  const [audioFile, setAudioFile] = useState<File | null>(null)
   const [fileName, setFileName] = useState<string | null>(null)
   const [mousePos, setMousePos] = useState({ x: 0, y: 0 })
   const [theme, setTheme] = useState<ColorTheme>(COLOR_THEMES[0])
   const fileInputRef = useRef<HTMLInputElement>(null)
-  const { analyzerData, error } = useAudioAnalyzer(audioMode, audioFile)
-  const [isListening, setIsListening] = useState(false)
+  const { analyzerData, error, startMic, startFile, stop, audioMode } = useAudioAnalyzer()
   const [showErrorTimeout, setShowErrorTimeout] = useState(false)
 
   useEffect(() => {
@@ -967,29 +976,28 @@ export default function AudioVisualizer() {
     }
   }, [error])
 
+  // Called directly from click on file input (user gesture preserved)
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
     if (file) {
-      setAudioFile(file)
       setFileName(file.name)
-      setAudioMode("file")
+      startFile(file) // user gesture context is preserved here
     }
   }
 
+  // Called directly from button click (user gesture)
   const toggleMic = () => {
     if (audioMode === "mic") {
-      setAudioMode("off")
+      stop()
     } else {
-      setAudioFile(null)
       setFileName(null)
       setShowErrorTimeout(false)
-      setAudioMode("mic")
+      startMic() // user gesture context is preserved here
     }
   }
 
   const stopAudio = () => {
-    setAudioMode("off")
-    setAudioFile(null)
+    stop()
     setFileName(null)
     if (fileInputRef.current) fileInputRef.current.value = ""
   }
