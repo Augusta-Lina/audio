@@ -60,8 +60,9 @@ function useAudioAnalyzer(): {
       streamRef.current.getTracks().forEach((t) => t.stop())
       streamRef.current = null
     }
+    // Don't await close — just fire and forget so we don't lose user gesture
     if (audioContextRef.current) {
-      audioContextRef.current.close()
+      audioContextRef.current.close().catch(() => {})
       audioContextRef.current = null
     }
     sourceRef.current = null
@@ -70,82 +71,82 @@ function useAudioAnalyzer(): {
   }
 
   // Called directly from a click handler so getUserMedia has user-gesture context
-  const startMic = async () => {
+  const startMic = () => {
     cleanup()
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
-      const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)()
+    // getUserMedia must be called synchronously from the gesture handler
+    navigator.mediaDevices
+      .getUserMedia({ audio: true })
+      .then((stream) => {
+        const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)()
 
-      if (audioContext.state === "suspended") {
-        await audioContext.resume()
-      }
+        const analyser = audioContext.createAnalyser()
+        analyser.fftSize = 256
+        analyser.smoothingTimeConstant = 0.75
+        analyser.minDecibels = -90
+        analyser.maxDecibels = -10
 
-      const analyser = audioContext.createAnalyser()
-      analyser.fftSize = 256
-      analyser.smoothingTimeConstant = 0.75
-      analyser.minDecibels = -90
-      analyser.maxDecibels = -10
+        const source = audioContext.createMediaStreamSource(stream)
+        source.connect(analyser)
 
-      const source = audioContext.createMediaStreamSource(stream)
-      source.connect(analyser)
-      // Don't connect mic analyser to destination to avoid feedback
-
-      audioContextRef.current = audioContext
-      sourceRef.current = source
-      streamRef.current = stream
-      setAnalyzerData({ analyser, dataArray: new Uint8Array(analyser.frequencyBinCount) })
-      setAudioMode("mic")
-    } catch (err: any) {
-      console.error("Error accessing microphone:", err)
-      if (err.name === "NotAllowedError") {
-        setError("Microphone permission denied. Please allow access in your browser settings.")
-      } else if (err.name === "NotFoundError") {
-        setError("No microphone found. Please check your device.")
-      } else {
-        setError("Unable to access microphone. Please try uploading an audio file instead.")
-      }
-    }
+        audioContextRef.current = audioContext
+        sourceRef.current = source
+        streamRef.current = stream
+        setAnalyzerData({ analyser, dataArray: new Uint8Array(analyser.frequencyBinCount) })
+        setAudioMode("mic")
+        console.log("[v0] Mic started, analyser bins:", analyser.frequencyBinCount)
+      })
+      .catch((err: any) => {
+        console.error("Error accessing microphone:", err)
+        if (err.name === "NotAllowedError") {
+          setError("Microphone permission denied. Please allow access in your browser settings.")
+        } else if (err.name === "NotFoundError") {
+          setError("No microphone found. Please check your device.")
+        } else {
+          setError("Unable to access microphone. Please try uploading an audio file instead.")
+        }
+      })
   }
 
   // Called directly from the file-input onChange handler (user gesture)
-  const startFile = async (file: File) => {
+  // IMPORTANT: Everything before the first await must set up and call play() synchronously
+  const startFile = (file: File) => {
     cleanup()
-    try {
-      const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)()
 
-      if (audioContext.state === "suspended") {
-        await audioContext.resume()
-      }
+    const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)()
 
-      const analyser = audioContext.createAnalyser()
-      analyser.fftSize = 256
-      analyser.smoothingTimeConstant = 0.75
-      analyser.minDecibels = -90
-      analyser.maxDecibels = -10
+    const analyser = audioContext.createAnalyser()
+    analyser.fftSize = 256
+    analyser.smoothingTimeConstant = 0.75
+    analyser.minDecibels = -90
+    analyser.maxDecibels = -10
 
-      const audio = new Audio()
-      audio.crossOrigin = "anonymous"
-      const url = URL.createObjectURL(file)
-      fileUrlRef.current = url
-      audio.src = url
-      audio.loop = true
+    const audio = new Audio()
+    audio.crossOrigin = "anonymous"
+    const url = URL.createObjectURL(file)
+    fileUrlRef.current = url
+    audio.src = url
+    audio.loop = true
 
-      const source = audioContext.createMediaElementSource(audio)
-      source.connect(analyser)
-      analyser.connect(audioContext.destination)
+    const source = audioContext.createMediaElementSource(audio)
+    source.connect(analyser)
+    analyser.connect(audioContext.destination)
 
-      audioContextRef.current = audioContext
-      sourceRef.current = source
-      audioElementRef.current = audio
+    audioContextRef.current = audioContext
+    sourceRef.current = source
+    audioElementRef.current = audio
 
-      // play() is called within the same user-gesture call stack
-      await audio.play()
-      setAnalyzerData({ analyser, dataArray: new Uint8Array(analyser.frequencyBinCount) })
-      setAudioMode("file")
-    } catch (err: any) {
-      console.error("Error playing file:", err)
-      setError("Unable to play audio file. Please try another file.")
-    }
+    // play() MUST be called synchronously within the user gesture call stack
+    audio
+      .play()
+      .then(() => {
+        console.log("[v0] Audio playing, context state:", audioContext.state)
+        setAnalyzerData({ analyser, dataArray: new Uint8Array(analyser.frequencyBinCount) })
+        setAudioMode("file")
+      })
+      .catch((err: any) => {
+        console.error("[v0] Error playing file:", err.name, err.message)
+        setError("Unable to play audio file. Please try another file.")
+      })
   }
 
   const stop = () => {
