@@ -466,17 +466,17 @@ export default function AudioVisualizer() {
   }, [])
 
   return (
-    <div className="w-full h-screen relative overflow-hidden">
+    <div className="w-full h-screen relative overflow-hidden bg-[#0a0a0f]">
       <Canvas camera={{ position: [0, 5, 10], fov: 60 }}>
         <Scene analyzerData={analyzerData} mousePos={mousePos} theme={theme} />
       </Canvas>
 
       <div className="absolute inset-0 pointer-events-none">
         <div className="absolute top-8 left-1/2 -translate-x-1/2 text-center">
-          <h1 className="text-4xl font-bold tracking-tight text-foreground mb-2">
+          <h1 className="text-4xl font-bold tracking-tight text-white mb-2">
             Audio Visualizer
           </h1>
-          <p className="text-muted-foreground text-sm">
+          <p className="text-white/60 text-sm">
             Move your mouse to interact
           </p>
         </div>
@@ -504,8 +504,8 @@ export default function AudioVisualizer() {
             onClick={() => setIsListening(!isListening)}
             className={`px-8 py-4 rounded-full font-semibold text-lg transition-all duration-300 ${
               isListening
-                ? "bg-primary text-primary-foreground shadow-[0_0_30px_rgba(255,26,92,0.5)]"
-                : "bg-secondary text-secondary-foreground hover:bg-secondary/80"
+                ? "bg-[#ff1a5c] text-white shadow-[0_0_30px_rgba(255,26,92,0.5)]"
+                : "bg-white/10 text-white hover:bg-white/20"
             }`}
           >
             {isListening ? "Stop Listening" : "Start Microphone"}
@@ -515,8 +515,8 @@ export default function AudioVisualizer() {
         {isListening && (
           <div className="absolute bottom-28 left-1/2 -translate-x-1/2">
             <div className="flex items-center gap-2">
-              <span className="w-3 h-3 bg-primary rounded-full animate-pulse" />
-              <span className="text-primary text-sm font-medium">
+              <span className="w-3 h-3 bg-[#ff1a5c] rounded-full animate-pulse" />
+              <span className="text-[#ff1a5c] text-sm font-medium">
                 Listening to microphone
               </span>
             </div>
