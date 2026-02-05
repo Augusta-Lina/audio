@@ -4,6 +4,15 @@ import { useRef, useMemo, useEffect, useState } from "react"
 import { Canvas, useFrame, useThree } from "@react-three/fiber"
 import { OrbitControls, Environment } from "@react-three/drei"
 import * as THREE from "three"
+import { Settings, X } from "lucide-react"
+import { colors } from "./colors" // Import colors from a separate file or declare it here
+
+interface ColorConfig {
+  primary: string
+  accent: string
+  particles: string
+  background: string
+}
 
 interface AudioAnalyzerData {
   analyser: AnalyserNode
@@ -111,26 +120,29 @@ function getFrequencyBands(analyser: AnalyserNode, dataArray: Uint8Array) {
 interface SymmetricBarsProps {
   analyzerData: AudioAnalyzerData | null
   mousePos: { x: number; y: number }
+  colors: ColorConfig
 }
 
-function SymmetricBars({ analyzerData, mousePos }: SymmetricBarsProps) {
+function SymmetricBars({ analyzerData, mousePos, colors: colorConfig }: SymmetricBarsProps) {
   const groupRef = useRef<THREE.Group>(null)
   const barsRef = useRef<THREE.InstancedMesh>(null)
   const count = 64
   const dummy = useMemo(() => new THREE.Object3D(), [])
 
-  const colors = useMemo(() => {
+  const barColors = useMemo(() => {
     const colorArray = new Float32Array(count * 2 * 3)
+    const primaryColor = new THREE.Color(colorConfig.primary)
+    const accentColor = new THREE.Color(colorConfig.accent)
+    
     for (let i = 0; i < count * 2; i++) {
       const t = (i % count) / count
-      const color = new THREE.Color()
-      color.setHSL(0.95 - t * 0.15, 0.85, 0.5 + t * 0.2)
+      const color = new THREE.Color().lerpColors(primaryColor, accentColor, t)
       colorArray[i * 3] = color.r
       colorArray[i * 3 + 1] = color.g
       colorArray[i * 3 + 2] = color.b
     }
     return colorArray
-  }, [])
+  }, [colorConfig.primary, colorConfig.accent])
 
   useFrame((state) => {
     if (!barsRef.current) return
@@ -184,16 +196,20 @@ function SymmetricBars({ analyzerData, mousePos }: SymmetricBarsProps) {
     <group ref={groupRef}>
       <instancedMesh ref={barsRef} args={[undefined, undefined, count * 2]}>
         <boxGeometry args={[1, 1, 1]} />
-        <meshStandardMaterial
+<meshStandardMaterial
           vertexColors
           metalness={0.6}
           roughness={0.2}
-          emissive="#ff1a5c"
+          emissive={colorConfig.primary}
           emissiveIntensity={0.3}
         />
         <instancedBufferAttribute
           attach="geometry-attributes-color"
-          args={[colors, 3]}
+          args={[barColors, 3]}
+        />
+        <instancedBufferAttribute
+          attach="geometry-attributes-color"
+          args={[barColors, 3]}
         />
       </instancedMesh>
     </group>
@@ -202,9 +218,10 @@ function SymmetricBars({ analyzerData, mousePos }: SymmetricBarsProps) {
 
 interface CentralOrbProps {
   analyzerData: AudioAnalyzerData | null
+  colors: ColorConfig
 }
 
-function CentralOrb({ analyzerData }: CentralOrbProps) {
+function CentralOrb({ analyzerData, colors: colorConfig }: CentralOrbProps) {
   const meshRef = useRef<THREE.Mesh>(null)
   const glowRef = useRef<THREE.Mesh>(null)
 
@@ -232,17 +249,17 @@ function CentralOrb({ analyzerData }: CentralOrbProps) {
       <mesh ref={meshRef}>
         <icosahedronGeometry args={[0.8, 2]} />
         <meshStandardMaterial
-          color="#ff1a5c"
+          color={colorConfig.primary}
           metalness={0.9}
           roughness={0.1}
-          emissive="#ff1a5c"
+          emissive={colorConfig.primary}
           emissiveIntensity={0.5}
         />
       </mesh>
       <mesh ref={glowRef}>
         <sphereGeometry args={[0.9, 32, 32]} />
         <meshBasicMaterial
-          color="#ff1a5c"
+          color={colorConfig.primary}
           transparent
           opacity={0.15}
         />
@@ -254,9 +271,10 @@ function CentralOrb({ analyzerData }: CentralOrbProps) {
 interface ParticleRingProps {
   analyzerData: AudioAnalyzerData | null
   mousePos: { x: number; y: number }
+  colors: ColorConfig
 }
 
-function ParticleRing({ analyzerData, mousePos }: ParticleRingProps) {
+function ParticleRing({ analyzerData, mousePos, colors: colorConfig }: ParticleRingProps) {
   const pointsRef = useRef<THREE.Points>(null)
   const count = 2000
 
@@ -325,7 +343,7 @@ function ParticleRing({ analyzerData, mousePos }: ParticleRingProps) {
       </bufferGeometry>
       <pointsMaterial
         size={0.05}
-        color="#c084fc"
+        color={colorConfig.particles}
         transparent
         opacity={0.8}
         sizeAttenuation
@@ -337,9 +355,10 @@ function ParticleRing({ analyzerData, mousePos }: ParticleRingProps) {
 
 interface WaveRingsProps {
   analyzerData: AudioAnalyzerData | null
+  colors: ColorConfig
 }
 
-function WaveRings({ analyzerData }: WaveRingsProps) {
+function WaveRings({ analyzerData, colors: colorConfig }: WaveRingsProps) {
   const ringsRef = useRef<THREE.Group>(null)
   const ringCount = 5
 
@@ -369,7 +388,7 @@ function WaveRings({ analyzerData }: WaveRingsProps) {
         <mesh key={i} rotation={[Math.PI / 2, 0, 0]}>
           <ringGeometry args={[0.95, 1, 64]} />
           <meshBasicMaterial
-            color={i % 2 === 0 ? "#ff1a5c" : "#c084fc"}
+            color={i % 2 === 0 ? colorConfig.primary : colorConfig.accent}
             transparent
             opacity={0.3 - i * 0.05}
             side={THREE.DoubleSide}
@@ -383,9 +402,11 @@ function WaveRings({ analyzerData }: WaveRingsProps) {
 function Scene({
   analyzerData,
   mousePos,
+  colors: colorConfig,
 }: {
   analyzerData: AudioAnalyzerData | null
   mousePos: { x: number; y: number }
+  colors: ColorConfig
 }) {
   const { camera } = useThree()
 
@@ -401,18 +422,18 @@ function Scene({
 
   return (
     <>
-      <color attach="background" args={["#0a0a0f"]} />
-      <fog attach="fog" args={["#0a0a0f", 8, 25]} />
+<color attach="background" args={[colorConfig.background]} />
+      <fog attach="fog" args={[colorConfig.background, 8, 25]} />
 
       <ambientLight intensity={0.2} />
-      <pointLight position={[0, 5, 0]} intensity={1} color="#ff1a5c" />
-      <pointLight position={[5, 0, 5]} intensity={0.5} color="#c084fc" />
-      <pointLight position={[-5, 0, -5]} intensity={0.5} color="#3b82f6" />
+      <pointLight position={[0, 5, 0]} intensity={1} color={colorConfig.primary} />
+      <pointLight position={[5, 0, 5]} intensity={0.5} color={colorConfig.accent} />
+      <pointLight position={[-5, 0, -5]} intensity={0.5} color={colorConfig.particles} />
 
-      <CentralOrb analyzerData={analyzerData} />
-      <SymmetricBars analyzerData={analyzerData} mousePos={mousePos} />
-      <ParticleRing analyzerData={analyzerData} mousePos={mousePos} />
-      <WaveRings analyzerData={analyzerData} />
+      <CentralOrb analyzerData={analyzerData} colors={colorConfig} />
+      <SymmetricBars analyzerData={analyzerData} mousePos={mousePos} colors={colorConfig} />
+      <ParticleRing analyzerData={analyzerData} mousePos={mousePos} colors={colorConfig} />
+      <WaveRings analyzerData={analyzerData} colors={colorConfig} />
 
       <OrbitControls
         enableZoom={false}
@@ -425,10 +446,31 @@ function Scene({
   )
 }
 
+const DEFAULT_COLORS: ColorConfig = {
+  primary: "#ff1a5c",
+  accent: "#c084fc",
+  particles: "#3b82f6",
+  background: "#0a0a0f",
+}
+
+const COLOR_PRESETS: { name: string; colors: ColorConfig }[] = [
+  { name: "Neon", colors: DEFAULT_COLORS },
+  { name: "Ocean", colors: { primary: "#06b6d4", accent: "#0ea5e9", particles: "#22d3ee", background: "#0a1628" } },
+  { name: "Sunset", colors: { primary: "#f97316", accent: "#f59e0b", particles: "#fbbf24", background: "#1c1007" } },
+  { name: "Forest", colors: { primary: "#22c55e", accent: "#10b981", particles: "#34d399", background: "#0a1f0f" } },
+  { name: "Lavender", colors: { primary: "#a855f7", accent: "#d946ef", particles: "#e879f9", background: "#150a1f" } },
+]
+
 export default function AudioVisualizer() {
   const [isListening, setIsListening] = useState(false)
   const [mousePos, setMousePos] = useState({ x: 0, y: 0 })
+  const [showControls, setShowControls] = useState(false)
+  const [colors, setColors] = useState<ColorConfig>(DEFAULT_COLORS)
   const analyzerData = useAudioAnalyzer(isListening)
+
+  const updateColor = (key: keyof ColorConfig, value: string) => {
+    setColors((prev) => ({ ...prev, [key]: value }))
+  }
 
   useEffect(() => {
     const handleMouseMove = (e: MouseEvent) => {
@@ -445,7 +487,7 @@ export default function AudioVisualizer() {
   return (
     <div className="w-full h-screen relative overflow-hidden">
       <Canvas camera={{ position: [0, 5, 10], fov: 60 }}>
-        <Scene analyzerData={analyzerData} mousePos={mousePos} />
+        <Scene analyzerData={analyzerData} mousePos={mousePos} colors={colors} />
       </Canvas>
 
       <div className="absolute inset-0 pointer-events-none">
@@ -457,6 +499,126 @@ export default function AudioVisualizer() {
             Move your mouse to interact
           </p>
         </div>
+
+        {/* Settings Button */}
+        <button
+          onClick={() => setShowControls(!showControls)}
+          className="absolute top-8 right-8 p-3 rounded-full bg-secondary/80 backdrop-blur-sm text-foreground hover:bg-secondary transition-colors pointer-events-auto"
+          aria-label="Toggle color controls"
+        >
+          {showControls ? <X size={20} /> : <Settings size={20} />}
+        </button>
+
+        {/* Control Panel */}
+        {showControls && (
+          <div className="absolute top-20 right-8 w-72 bg-card/90 backdrop-blur-md rounded-2xl border border-border p-5 pointer-events-auto">
+            <h2 className="text-lg font-semibold text-foreground mb-4">Color Controls</h2>
+            
+            {/* Color Presets */}
+            <div className="mb-5">
+              <label className="text-sm text-muted-foreground mb-2 block">Presets</label>
+              <div className="flex flex-wrap gap-2">
+                {COLOR_PRESETS.map((preset) => (
+                  <button
+                    key={preset.name}
+                    onClick={() => setColors(preset.colors)}
+                    className="px-3 py-1.5 rounded-lg text-sm font-medium transition-all"
+                    style={{
+                      backgroundColor: preset.colors.primary + "20",
+                      color: preset.colors.primary,
+                      border: colors.primary === preset.colors.primary ? `2px solid ${preset.colors.primary}` : "2px solid transparent",
+                    }}
+                  >
+                    {preset.name}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Individual Color Pickers */}
+            <div className="space-y-4">
+              <div>
+                <label className="text-sm text-muted-foreground mb-2 block">Primary Color</label>
+                <div className="flex items-center gap-3">
+                  <input
+                    type="color"
+                    value={colors.primary}
+                    onChange={(e) => updateColor("primary", e.target.value)}
+                    className="w-10 h-10 rounded-lg cursor-pointer border-0 bg-transparent"
+                  />
+                  <input
+                    type="text"
+                    value={colors.primary}
+                    onChange={(e) => updateColor("primary", e.target.value)}
+                    className="flex-1 bg-secondary/50 border border-border rounded-lg px-3 py-2 text-sm text-foreground font-mono"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="text-sm text-muted-foreground mb-2 block">Accent Color</label>
+                <div className="flex items-center gap-3">
+                  <input
+                    type="color"
+                    value={colors.accent}
+                    onChange={(e) => updateColor("accent", e.target.value)}
+                    className="w-10 h-10 rounded-lg cursor-pointer border-0 bg-transparent"
+                  />
+                  <input
+                    type="text"
+                    value={colors.accent}
+                    onChange={(e) => updateColor("accent", e.target.value)}
+                    className="flex-1 bg-secondary/50 border border-border rounded-lg px-3 py-2 text-sm text-foreground font-mono"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="text-sm text-muted-foreground mb-2 block">Particle Color</label>
+                <div className="flex items-center gap-3">
+                  <input
+                    type="color"
+                    value={colors.particles}
+                    onChange={(e) => updateColor("particles", e.target.value)}
+                    className="w-10 h-10 rounded-lg cursor-pointer border-0 bg-transparent"
+                  />
+                  <input
+                    type="text"
+                    value={colors.particles}
+                    onChange={(e) => updateColor("particles", e.target.value)}
+                    className="flex-1 bg-secondary/50 border border-border rounded-lg px-3 py-2 text-sm text-foreground font-mono"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="text-sm text-muted-foreground mb-2 block">Background Color</label>
+                <div className="flex items-center gap-3">
+                  <input
+                    type="color"
+                    value={colors.background}
+                    onChange={(e) => updateColor("background", e.target.value)}
+                    className="w-10 h-10 rounded-lg cursor-pointer border-0 bg-transparent"
+                  />
+                  <input
+                    type="text"
+                    value={colors.background}
+                    onChange={(e) => updateColor("background", e.target.value)}
+                    className="flex-1 bg-secondary/50 border border-border rounded-lg px-3 py-2 text-sm text-foreground font-mono"
+                  />
+                </div>
+              </div>
+            </div>
+
+            {/* Reset Button */}
+            <button
+              onClick={() => setColors(DEFAULT_COLORS)}
+              className="w-full mt-5 px-4 py-2 rounded-lg bg-secondary text-foreground text-sm font-medium hover:bg-secondary/80 transition-colors"
+            >
+              Reset to Default
+            </button>
+          </div>
+        )}
 
         <div className="absolute bottom-8 left-1/2 -translate-x-1/2 pointer-events-auto">
           <button
