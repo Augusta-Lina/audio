@@ -5,6 +5,21 @@ import { Canvas, useFrame, useThree } from "@react-three/fiber"
 import { OrbitControls, Environment } from "@react-three/drei"
 import * as THREE from "three"
 
+interface ColorTheme {
+  name: string
+  primary: string
+  accent: string
+  particles: string
+}
+
+const COLOR_THEMES: ColorTheme[] = [
+  { name: "Neon", primary: "#ff1a5c", accent: "#c084fc", particles: "#3b82f6" },
+  { name: "Ocean", primary: "#06b6d4", accent: "#0ea5e9", particles: "#22d3ee" },
+  { name: "Sunset", primary: "#f97316", accent: "#fbbf24", particles: "#ef4444" },
+  { name: "Forest", primary: "#22c55e", accent: "#84cc16", particles: "#10b981" },
+  { name: "Violet", primary: "#a855f7", accent: "#ec4899", particles: "#6366f1" },
+]
+
 interface AudioAnalyzerData {
   analyser: AnalyserNode
   dataArray: Uint8Array
@@ -111,9 +126,10 @@ function getFrequencyBands(analyser: AnalyserNode, dataArray: Uint8Array) {
 interface SymmetricBarsProps {
   analyzerData: AudioAnalyzerData | null
   mousePos: { x: number; y: number }
+  theme: ColorTheme
 }
 
-function SymmetricBars({ analyzerData, mousePos }: SymmetricBarsProps) {
+function SymmetricBars({ analyzerData, mousePos, theme }: SymmetricBarsProps) {
   const groupRef = useRef<THREE.Group>(null)
   const barsRef = useRef<THREE.InstancedMesh>(null)
   const count = 64
@@ -121,16 +137,17 @@ function SymmetricBars({ analyzerData, mousePos }: SymmetricBarsProps) {
 
   const colors = useMemo(() => {
     const colorArray = new Float32Array(count * 2 * 3)
+    const primaryColor = new THREE.Color(theme.primary)
+    const accentColor = new THREE.Color(theme.accent)
     for (let i = 0; i < count * 2; i++) {
       const t = (i % count) / count
-      const color = new THREE.Color()
-      color.setHSL(0.95 - t * 0.15, 0.85, 0.5 + t * 0.2)
+      const color = new THREE.Color().lerpColors(primaryColor, accentColor, t)
       colorArray[i * 3] = color.r
       colorArray[i * 3 + 1] = color.g
       colorArray[i * 3 + 2] = color.b
     }
     return colorArray
-  }, [])
+  }, [theme.primary, theme.accent])
 
   useFrame((state) => {
     if (!barsRef.current) return
@@ -188,7 +205,7 @@ function SymmetricBars({ analyzerData, mousePos }: SymmetricBarsProps) {
           vertexColors
           metalness={0.6}
           roughness={0.2}
-          emissive="#ff1a5c"
+          emissive={theme.primary}
           emissiveIntensity={0.3}
         />
         <instancedBufferAttribute
@@ -202,9 +219,10 @@ function SymmetricBars({ analyzerData, mousePos }: SymmetricBarsProps) {
 
 interface CentralOrbProps {
   analyzerData: AudioAnalyzerData | null
+  theme: ColorTheme
 }
 
-function CentralOrb({ analyzerData }: CentralOrbProps) {
+function CentralOrb({ analyzerData, theme }: CentralOrbProps) {
   const meshRef = useRef<THREE.Mesh>(null)
   const glowRef = useRef<THREE.Mesh>(null)
 
@@ -232,17 +250,17 @@ function CentralOrb({ analyzerData }: CentralOrbProps) {
       <mesh ref={meshRef}>
         <icosahedronGeometry args={[0.8, 2]} />
         <meshStandardMaterial
-          color="#ff1a5c"
+          color={theme.primary}
           metalness={0.9}
           roughness={0.1}
-          emissive="#ff1a5c"
+          emissive={theme.primary}
           emissiveIntensity={0.5}
         />
       </mesh>
       <mesh ref={glowRef}>
         <sphereGeometry args={[0.9, 32, 32]} />
         <meshBasicMaterial
-          color="#ff1a5c"
+          color={theme.primary}
           transparent
           opacity={0.15}
         />
@@ -254,9 +272,10 @@ function CentralOrb({ analyzerData }: CentralOrbProps) {
 interface ParticleRingProps {
   analyzerData: AudioAnalyzerData | null
   mousePos: { x: number; y: number }
+  theme: ColorTheme
 }
 
-function ParticleRing({ analyzerData, mousePos }: ParticleRingProps) {
+function ParticleRing({ analyzerData, mousePos, theme }: ParticleRingProps) {
   const pointsRef = useRef<THREE.Points>(null)
   const count = 2000
 
@@ -325,7 +344,7 @@ function ParticleRing({ analyzerData, mousePos }: ParticleRingProps) {
       </bufferGeometry>
       <pointsMaterial
         size={0.05}
-        color="#c084fc"
+        color={theme.particles}
         transparent
         opacity={0.8}
         sizeAttenuation
@@ -337,9 +356,10 @@ function ParticleRing({ analyzerData, mousePos }: ParticleRingProps) {
 
 interface WaveRingsProps {
   analyzerData: AudioAnalyzerData | null
+  theme: ColorTheme
 }
 
-function WaveRings({ analyzerData }: WaveRingsProps) {
+function WaveRings({ analyzerData, theme }: WaveRingsProps) {
   const ringsRef = useRef<THREE.Group>(null)
   const ringCount = 5
 
@@ -369,7 +389,7 @@ function WaveRings({ analyzerData }: WaveRingsProps) {
         <mesh key={i} rotation={[Math.PI / 2, 0, 0]}>
           <ringGeometry args={[0.95, 1, 64]} />
           <meshBasicMaterial
-            color={i % 2 === 0 ? "#ff1a5c" : "#c084fc"}
+            color={i % 2 === 0 ? theme.primary : theme.accent}
             transparent
             opacity={0.3 - i * 0.05}
             side={THREE.DoubleSide}
@@ -383,9 +403,11 @@ function WaveRings({ analyzerData }: WaveRingsProps) {
 function Scene({
   analyzerData,
   mousePos,
+  theme,
 }: {
   analyzerData: AudioAnalyzerData | null
   mousePos: { x: number; y: number }
+  theme: ColorTheme
 }) {
   const { camera } = useThree()
 
@@ -405,14 +427,14 @@ function Scene({
       <fog attach="fog" args={["#0a0a0f", 8, 25]} />
 
       <ambientLight intensity={0.2} />
-      <pointLight position={[0, 5, 0]} intensity={1} color="#ff1a5c" />
-      <pointLight position={[5, 0, 5]} intensity={0.5} color="#c084fc" />
-      <pointLight position={[-5, 0, -5]} intensity={0.5} color="#3b82f6" />
+      <pointLight position={[0, 5, 0]} intensity={1} color={theme.primary} />
+      <pointLight position={[5, 0, 5]} intensity={0.5} color={theme.accent} />
+      <pointLight position={[-5, 0, -5]} intensity={0.5} color={theme.particles} />
 
-      <CentralOrb analyzerData={analyzerData} />
-      <SymmetricBars analyzerData={analyzerData} mousePos={mousePos} />
-      <ParticleRing analyzerData={analyzerData} mousePos={mousePos} />
-      <WaveRings analyzerData={analyzerData} />
+      <CentralOrb analyzerData={analyzerData} theme={theme} />
+      <SymmetricBars analyzerData={analyzerData} mousePos={mousePos} theme={theme} />
+      <ParticleRing analyzerData={analyzerData} mousePos={mousePos} theme={theme} />
+      <WaveRings analyzerData={analyzerData} theme={theme} />
 
       <OrbitControls
         enableZoom={false}
@@ -428,6 +450,7 @@ function Scene({
 export default function AudioVisualizer() {
   const [isListening, setIsListening] = useState(false)
   const [mousePos, setMousePos] = useState({ x: 0, y: 0 })
+  const [theme, setTheme] = useState<ColorTheme>(COLOR_THEMES[0])
   const analyzerData = useAudioAnalyzer(isListening)
 
   useEffect(() => {
@@ -445,7 +468,7 @@ export default function AudioVisualizer() {
   return (
     <div className="w-full h-screen relative overflow-hidden">
       <Canvas camera={{ position: [0, 5, 10], fov: 60 }}>
-        <Scene analyzerData={analyzerData} mousePos={mousePos} />
+        <Scene analyzerData={analyzerData} mousePos={mousePos} theme={theme} />
       </Canvas>
 
       <div className="absolute inset-0 pointer-events-none">
@@ -456,6 +479,24 @@ export default function AudioVisualizer() {
           <p className="text-muted-foreground text-sm">
             Move your mouse to interact
           </p>
+        </div>
+
+        {/* Theme Switcher */}
+        <div className="absolute top-8 right-8 flex gap-2 pointer-events-auto">
+          {COLOR_THEMES.map((t) => (
+            <button
+              key={t.name}
+              onClick={() => setTheme(t)}
+              className={`w-8 h-8 rounded-full border-2 transition-all ${
+                theme.name === t.name
+                  ? "border-white scale-110"
+                  : "border-transparent hover:scale-105"
+              }`}
+              style={{ backgroundColor: t.primary }}
+              title={t.name}
+              aria-label={`Switch to ${t.name} theme`}
+            />
+          ))}
         </div>
 
         <div className="absolute bottom-8 left-1/2 -translate-x-1/2 pointer-events-auto">
