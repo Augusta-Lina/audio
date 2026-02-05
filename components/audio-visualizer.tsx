@@ -31,8 +31,9 @@ type AudioMode = "off" | "mic" | "file"
 function useAudioAnalyzer(
   mode: AudioMode,
   audioFile: File | null
-): { analyzerData: AudioAnalyzerData | null; audioElement: HTMLAudioElement | null } {
+): { analyzerData: AudioAnalyzerData | null; audioElement: HTMLAudioElement | null; error?: string } {
   const [analyzerData, setAnalyzerData] = useState<AudioAnalyzerData | null>(null)
+  const [error, setError] = useState<string>()
   const audioContextRef = useRef<AudioContext | null>(null)
   const audioElementRef = useRef<HTMLAudioElement | null>(null)
   const sourceRef = useRef<MediaElementAudioSourceNode | MediaStreamAudioSourceNode | null>(null)
@@ -55,6 +56,7 @@ function useAudioAnalyzer(
     }
     sourceRef.current = null
     setAnalyzerData(null)
+    setError(undefined)
 
     if (mode === "off") return
 
@@ -71,8 +73,15 @@ function useAudioAnalyzer(
           audioContextRef.current = audioContext
           sourceRef.current = source
           setAnalyzerData({ analyser, dataArray: new Uint8Array(analyser.frequencyBinCount) })
-        } catch (err) {
+        } catch (err: any) {
           console.error("Error accessing microphone:", err)
+          if (err.name === "NotAllowedError") {
+            setError("Microphone permission denied. Please allow access in your browser settings.")
+          } else if (err.name === "NotFoundError") {
+            setError("No microphone found. Please check your device.")
+          } else {
+            setError("Unable to access microphone. Please try uploading an audio file instead.")
+          }
         }
       }
       initMic()
@@ -117,7 +126,7 @@ function useAudioAnalyzer(
     }
   }, [mode, audioFile])
 
-  return { analyzerData, audioElement: audioElementRef.current }
+  return { analyzerData, audioElement: audioElementRef.current, error }
 }
 
 function getFrequencies(analyzerData: AudioAnalyzerData | null, count: number, time: number): number[] {
@@ -927,8 +936,17 @@ export default function AudioVisualizer() {
   const [mousePos, setMousePos] = useState({ x: 0, y: 0 })
   const [theme, setTheme] = useState<ColorTheme>(COLOR_THEMES[0])
   const fileInputRef = useRef<HTMLInputElement>(null)
-  const { analyzerData } = useAudioAnalyzer(audioMode, audioFile)
+  const { analyzerData, error } = useAudioAnalyzer(audioMode, audioFile)
   const [isListening, setIsListening] = useState(false)
+  const [showErrorTimeout, setShowErrorTimeout] = useState(false)
+
+  useEffect(() => {
+    if (error) {
+      setShowErrorTimeout(true)
+      const timer = setTimeout(() => setShowErrorTimeout(false), 5000)
+      return () => clearTimeout(timer)
+    }
+  }, [error])
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
@@ -945,6 +963,7 @@ export default function AudioVisualizer() {
     } else {
       setAudioFile(null)
       setFileName(null)
+      setShowErrorTimeout(false)
       setAudioMode("mic")
     }
   }
@@ -976,6 +995,13 @@ export default function AudioVisualizer() {
       >
         <Scene analyzerData={analyzerData} mousePos={mousePos} theme={theme} />
       </Canvas>
+
+      {/* Error message */}
+      {error && showErrorTimeout && (
+        <div className="absolute top-4 left-1/2 -translate-x-1/2 bg-red-500/90 backdrop-blur-sm text-white px-6 py-3 rounded-lg text-sm pointer-events-auto z-50 animate-pulse">
+          {error}
+        </div>
+      )}
 
       <div className="absolute inset-0 pointer-events-none">
         <div className="absolute top-8 right-8 flex gap-2 pointer-events-auto">
