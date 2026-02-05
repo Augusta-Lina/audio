@@ -197,9 +197,28 @@ function SymmetricBars({ analyzerData, mousePos, theme }: SymmetricBarsProps) {
     }
   })
 
+  useEffect(() => {
+    if (barsRef.current) {
+      const colorAttr = barsRef.current.geometry.getAttribute("color")
+      if (colorAttr) {
+        const colorArray = colorAttr.array as Float32Array
+        const primaryColor = new THREE.Color(theme.primary)
+        const accentColor = new THREE.Color(theme.accent)
+        for (let i = 0; i < count * 2; i++) {
+          const t = (i % count) / count
+          const color = new THREE.Color().lerpColors(primaryColor, accentColor, t)
+          colorArray[i * 3] = color.r
+          colorArray[i * 3 + 1] = color.g
+          colorArray[i * 3 + 2] = color.b
+        }
+        colorAttr.needsUpdate = true
+      }
+    }
+  }, [theme.primary, theme.accent, count])
+
   return (
     <group ref={groupRef}>
-      <instancedMesh ref={barsRef} args={[undefined, undefined, count * 2]}>
+      <instancedMesh ref={barsRef} args={[undefined, undefined, count * 2]} key={theme.name}>
         <boxGeometry args={[1, 1, 1]} />
         <meshStandardMaterial
           vertexColors
