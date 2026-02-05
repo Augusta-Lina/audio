@@ -1,7 +1,7 @@
 "use client"
 
 import { useRef, useMemo, useEffect, useState } from "react"
-import { Canvas, useFrame, useThree } from "@react-three/fiber"
+import { Canvas, useFrame, useThree, extend } from "@react-three/fiber"
 import * as THREE from "three"
 
 interface ColorTheme {
@@ -45,21 +45,16 @@ function useAudioAnalyzer(isListening: boolean): AudioAnalyzerData | null {
         const analyser = audioContext.createAnalyser()
         analyser.fftSize = 256
         analyser.smoothingTimeConstant = 0.8
-
         const source = audioContext.createMediaStreamSource(stream)
         source.connect(analyser)
-
         const dataArray = new Uint8Array(analyser.frequencyBinCount)
         audioContextRef.current = audioContext
-
         setAnalyzerData({ analyser, dataArray })
       } catch (err) {
         console.error("Error accessing microphone:", err)
       }
     }
-
     initAudio()
-
     return () => {
       if (audioContextRef.current) {
         audioContextRef.current.close()
@@ -70,7 +65,6 @@ function useAudioAnalyzer(isListening: boolean): AudioAnalyzerData | null {
   return analyzerData
 }
 
-// Helper: get smoothed frequency bands
 function getFrequencies(analyzerData: AudioAnalyzerData | null, count: number, time: number): number[] {
   const frequencies: number[] = []
   if (analyzerData) {
@@ -105,7 +99,370 @@ function getBass(analyzerData: AudioAnalyzerData | null, time: number): number {
   return 0.5 + Math.sin(time * 2) * 0.3
 }
 
-// Outer symmetrical frequency bars
+function getMids(analyzerData: AudioAnalyzerData | null, time: number): number {
+  if (analyzerData) {
+    analyzerData.analyser.getByteFrequencyData(analyzerData.dataArray)
+    let mids = 0
+    const len = analyzerData.dataArray.length
+    const start = Math.floor(len * 0.2)
+    const end = Math.floor(len * 0.6)
+    for (let i = start; i < end; i++) {
+      mids += analyzerData.dataArray[i] / 255
+    }
+    return mids / (end - start)
+  }
+  return 0.4 + Math.sin(time * 3.1) * 0.2
+}
+
+function getHighs(analyzerData: AudioAnalyzerData | null, time: number): number {
+  if (analyzerData) {
+    analyzerData.analyser.getByteFrequencyData(analyzerData.dataArray)
+    let highs = 0
+    const len = analyzerData.dataArray.length
+    const start = Math.floor(len * 0.6)
+    for (let i = start; i < len; i++) {
+      highs += analyzerData.dataArray[i] / 255
+    }
+    return highs / (len - start)
+  }
+  return 0.3 + Math.cos(time * 4.2) * 0.15
+}
+
+// ========== Shader background ==========
+class VoidShaderMaterial extends THREE.ShaderMaterial {
+  constructor() {
+    super({
+      uniforms: {
+        uTime: { value: 0 },
+        uBass: { value: 0 },
+        uColor1: { value: new THREE.Color("#ff1a5c") },
+        uColor2: { value: new THREE.Color("#c084fc") },
+      },
+      vertexShader: `
+        varying vec2 vUv;
+        void main() {
+          vUv = uv;
+          gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+        }
+      `,
+      fragmentShader: `
+        uniform float uTime;
+        uniform float uBass;
+        uniform vec3 uColor1;
+        uniform vec3 uColor2;
+        varying vec2 vUv;
+        
+        void main() {
+          vec2 uv = vUv - 0.5;
+          float dist = length(uv);
+          float angle = atan(uv.y, uv.x);
+          
+          float ring = sin(dist * 20.0 - uTime * 2.0) * 0.5 + 0.5;
+          ring *= smoothstep(0.5, 0.15, dist);
+          
+          float spiral = sin(angle * 6.0 + dist * 15.0 - uTime * 3.0) * 0.5 + 0.5;
+          spiral *= smoothstep(0.5, 0.1, dist);
+          
+          float pattern = ring * 0.5 + spiral * 0.5;
+          pattern *= uBass * 0.4 + 0.08;
+          
+          vec3 color = mix(uColor1, uColor2, spiral) * pattern;
+          gl_FragColor = vec4(color, 1.0);
+        }
+      `,
+      side: THREE.DoubleSide,
+      transparent: true,
+    })
+  }
+}
+
+extend({ VoidShaderMaterial })
+
+function ShaderBackground({
+  analyzerData,
+  theme,
+}: {
+  analyzerData: AudioAnalyzerData | null
+  theme: ColorTheme
+}) {
+  const matRef = useRef<VoidShaderMaterial>(null)
+
+  useFrame((state) => {
+    if (!matRef.current) return
+    const time = state.clock.elapsedTime
+    matRef.current.uniforms.uTime.value = time
+    matRef.current.uniforms.uBass.value = getBass(analyzerData, time)
+    matRef.current.uniforms.uColor1.value.set(theme.primary)
+    matRef.current.uniforms.uColor2.value.set(theme.accent)
+  })
+
+  return (
+    <mesh position={[0, 0, -12]} scale={[40, 40, 1]}>
+      <planeGeometry args={[1, 1]} />
+      {/* @ts-ignore */}
+      <voidShaderMaterial ref={matRef} />
+    </mesh>
+  )
+}
+
+// ========== DNA double helix ==========
+function DNAHelix({
+  analyzerData,
+  theme,
+  mousePos,
+}: {
+  analyzerData: AudioAnalyzerData | null
+  theme: ColorTheme
+  mousePos: { x: number; y: number }
+}) {
+  const groupRef = useRef<THREE.Group>(null)
+  const strand1Ref = useRef<THREE.Mesh[]>([])
+  const strand2Ref = useRef<THREE.Mesh[]>([])
+  const connectorsRef = useRef<THREE.Mesh[]>([])
+  const nodeCount = 30
+  const connectorCount = 15
+
+  useFrame((state) => {
+    const time = state.clock.elapsedTime
+    const bass = getBass(analyzerData, time)
+    const mids = getMids(analyzerData, time)
+
+    strand1Ref.current.forEach((mesh, i) => {
+      if (!mesh) return
+      const t = i / nodeCount
+      const y = (t - 0.5) * 12
+      const twist = t * Math.PI * 4 + time * 1.5
+      const radius = 1.2 + mids * 0.8
+      mesh.position.set(Math.cos(twist) * radius, y, Math.sin(twist) * radius)
+      mesh.scale.setScalar(0.06 + bass * 0.06 + Math.sin(time * 4 + i * 0.3) * 0.02)
+    })
+
+    strand2Ref.current.forEach((mesh, i) => {
+      if (!mesh) return
+      const t = i / nodeCount
+      const y = (t - 0.5) * 12
+      const twist = t * Math.PI * 4 + time * 1.5 + Math.PI
+      const radius = 1.2 + mids * 0.8
+      mesh.position.set(Math.cos(twist) * radius, y, Math.sin(twist) * radius)
+      mesh.scale.setScalar(0.06 + bass * 0.06 + Math.sin(time * 4 + i * 0.3) * 0.02)
+    })
+
+    connectorsRef.current.forEach((mesh, i) => {
+      if (!mesh) return
+      const idx = Math.floor((i / connectorCount) * nodeCount)
+      const s1 = strand1Ref.current[idx]
+      const s2 = strand2Ref.current[idx]
+      if (!s1 || !s2) return
+      const midPoint = new THREE.Vector3().addVectors(s1.position, s2.position).multiplyScalar(0.5)
+      mesh.position.copy(midPoint)
+      mesh.lookAt(s1.position)
+      const dist = s1.position.distanceTo(s2.position)
+      mesh.scale.set(0.015 + bass * 0.01, 0.015 + bass * 0.01, dist)
+      const mat = mesh.material as THREE.MeshBasicMaterial
+      mat.opacity = 0.3 + mids * 0.4
+    })
+
+    if (groupRef.current) {
+      groupRef.current.rotation.y = time * 0.2 + mousePos.x * 0.5
+      groupRef.current.position.x = -5.5
+    }
+  })
+
+  return (
+    <group ref={groupRef}>
+      {Array.from({ length: nodeCount }).map((_, i) => (
+        <mesh key={`s1-${i}`} ref={(el) => { if (el) strand1Ref.current[i] = el }}>
+          <sphereGeometry args={[1, 8, 8]} />
+          <meshStandardMaterial color={theme.primary} emissive={theme.primary} emissiveIntensity={0.8} metalness={0.9} roughness={0.1} />
+        </mesh>
+      ))}
+      {Array.from({ length: nodeCount }).map((_, i) => (
+        <mesh key={`s2-${i}`} ref={(el) => { if (el) strand2Ref.current[i] = el }}>
+          <sphereGeometry args={[1, 8, 8]} />
+          <meshStandardMaterial color={theme.accent} emissive={theme.accent} emissiveIntensity={0.8} metalness={0.9} roughness={0.1} />
+        </mesh>
+      ))}
+      {Array.from({ length: connectorCount }).map((_, i) => (
+        <mesh key={`c-${i}`} ref={(el) => { if (el) connectorsRef.current[i] = el }}>
+          <boxGeometry args={[1, 1, 1]} />
+          <meshBasicMaterial color={theme.particles} transparent opacity={0.4} blending={THREE.AdditiveBlending} />
+        </mesh>
+      ))}
+    </group>
+  )
+}
+
+// ========== Mirror DNA on the right ==========
+function DNAHelixMirror({
+  analyzerData,
+  theme,
+  mousePos,
+}: {
+  analyzerData: AudioAnalyzerData | null
+  theme: ColorTheme
+  mousePos: { x: number; y: number }
+}) {
+  const groupRef = useRef<THREE.Group>(null)
+  const strand1Ref = useRef<THREE.Mesh[]>([])
+  const strand2Ref = useRef<THREE.Mesh[]>([])
+  const connectorsRef = useRef<THREE.Mesh[]>([])
+  const nodeCount = 30
+  const connectorCount = 15
+
+  useFrame((state) => {
+    const time = state.clock.elapsedTime
+    const bass = getBass(analyzerData, time)
+    const mids = getMids(analyzerData, time)
+
+    strand1Ref.current.forEach((mesh, i) => {
+      if (!mesh) return
+      const t = i / nodeCount
+      const y = (t - 0.5) * 12
+      const twist = t * Math.PI * 4 - time * 1.5
+      const radius = 1.2 + mids * 0.8
+      mesh.position.set(Math.cos(twist) * radius, y, Math.sin(twist) * radius)
+      mesh.scale.setScalar(0.06 + bass * 0.06 + Math.sin(time * 4 + i * 0.3) * 0.02)
+    })
+
+    strand2Ref.current.forEach((mesh, i) => {
+      if (!mesh) return
+      const t = i / nodeCount
+      const y = (t - 0.5) * 12
+      const twist = t * Math.PI * 4 - time * 1.5 + Math.PI
+      const radius = 1.2 + mids * 0.8
+      mesh.position.set(Math.cos(twist) * radius, y, Math.sin(twist) * radius)
+      mesh.scale.setScalar(0.06 + bass * 0.06 + Math.sin(time * 4 + i * 0.3) * 0.02)
+    })
+
+    connectorsRef.current.forEach((mesh, i) => {
+      if (!mesh) return
+      const idx = Math.floor((i / connectorCount) * nodeCount)
+      const s1 = strand1Ref.current[idx]
+      const s2 = strand2Ref.current[idx]
+      if (!s1 || !s2) return
+      const midPoint = new THREE.Vector3().addVectors(s1.position, s2.position).multiplyScalar(0.5)
+      mesh.position.copy(midPoint)
+      mesh.lookAt(s1.position)
+      const dist = s1.position.distanceTo(s2.position)
+      mesh.scale.set(0.015 + bass * 0.01, 0.015 + bass * 0.01, dist)
+      const mat = mesh.material as THREE.MeshBasicMaterial
+      mat.opacity = 0.3 + mids * 0.4
+    })
+
+    if (groupRef.current) {
+      groupRef.current.rotation.y = -time * 0.2 - mousePos.x * 0.5
+      groupRef.current.position.x = 5.5
+    }
+  })
+
+  return (
+    <group ref={groupRef}>
+      {Array.from({ length: nodeCount }).map((_, i) => (
+        <mesh key={`s1m-${i}`} ref={(el) => { if (el) strand1Ref.current[i] = el }}>
+          <sphereGeometry args={[1, 8, 8]} />
+          <meshStandardMaterial color={theme.accent} emissive={theme.accent} emissiveIntensity={0.8} metalness={0.9} roughness={0.1} />
+        </mesh>
+      ))}
+      {Array.from({ length: nodeCount }).map((_, i) => (
+        <mesh key={`s2m-${i}`} ref={(el) => { if (el) strand2Ref.current[i] = el }}>
+          <sphereGeometry args={[1, 8, 8]} />
+          <meshStandardMaterial color={theme.primary} emissive={theme.primary} emissiveIntensity={0.8} metalness={0.9} roughness={0.1} />
+        </mesh>
+      ))}
+      {Array.from({ length: connectorCount }).map((_, i) => (
+        <mesh key={`cm-${i}`} ref={(el) => { if (el) connectorsRef.current[i] = el }}>
+          <boxGeometry args={[1, 1, 1]} />
+          <meshBasicMaterial color={theme.particles} transparent opacity={0.4} blending={THREE.AdditiveBlending} />
+        </mesh>
+      ))}
+    </group>
+  )
+}
+
+// ========== Central orb with warping geometry ==========
+function CentralOrb({
+  analyzerData,
+  theme,
+}: {
+  analyzerData: AudioAnalyzerData | null
+  theme: ColorTheme
+}) {
+  const meshRef = useRef<THREE.Mesh>(null)
+  const glowRef = useRef<THREE.Mesh>(null)
+  const wireRef = useRef<THREE.Mesh>(null)
+  const wire2Ref = useRef<THREE.Mesh>(null)
+
+  useFrame((state) => {
+    if (!meshRef.current || !glowRef.current || !wireRef.current || !wire2Ref.current) return
+    const time = state.clock.elapsedTime
+    const bass = getBass(analyzerData, time)
+    const mids = getMids(analyzerData, time)
+
+    const scale = 0.9 + bass * 0.7
+    meshRef.current.scale.setScalar(scale)
+    glowRef.current.scale.setScalar(scale * 2 + Math.sin(time * 3) * 0.15)
+    wireRef.current.scale.setScalar(scale * 1.3)
+    wire2Ref.current.scale.setScalar(scale * 1.6)
+
+    meshRef.current.rotation.y = time * 0.5
+    meshRef.current.rotation.x = time * 0.3
+    wireRef.current.rotation.y = -time * 0.4
+    wireRef.current.rotation.z = time * 0.25
+    wire2Ref.current.rotation.y = time * 0.2
+    wire2Ref.current.rotation.x = -time * 0.15
+
+    // Warp vertices based on audio
+    const geom = meshRef.current.geometry
+    const pos = geom.attributes.position
+    const arr = pos.array as Float32Array
+    for (let i = 0; i < pos.count; i++) {
+      const x = arr[i * 3]
+      const y = arr[i * 3 + 1]
+      const z = arr[i * 3 + 2]
+      const len = Math.sqrt(x * x + y * y + z * z)
+      if (len > 0) {
+        const nx = x / len
+        const ny = y / len
+        const nz = z / len
+        const warp = 0.8
+          + Math.sin(nx * 5 + time * 3) * bass * 0.2
+          + Math.cos(ny * 4 + time * 2.5) * mids * 0.15
+          + Math.sin(nz * 6 + time * 2) * bass * 0.1
+          + Math.sin((nx + ny) * 8 + time * 4) * mids * 0.08
+        arr[i * 3] = nx * warp
+        arr[i * 3 + 1] = ny * warp
+        arr[i * 3 + 2] = nz * warp
+      }
+    }
+    pos.needsUpdate = true
+
+    const glowMat = glowRef.current.material as THREE.MeshBasicMaterial
+    glowMat.opacity = 0.06 + bass * 0.1
+  })
+
+  return (
+    <group>
+      <mesh ref={meshRef}>
+        <icosahedronGeometry args={[0.8, 3]} />
+        <meshStandardMaterial color={theme.primary} metalness={0.95} roughness={0.02} emissive={theme.primary} emissiveIntensity={0.8} />
+      </mesh>
+      <mesh ref={wireRef}>
+        <icosahedronGeometry args={[0.8, 1]} />
+        <meshBasicMaterial color={theme.accent} wireframe transparent opacity={0.35} />
+      </mesh>
+      <mesh ref={wire2Ref}>
+        <octahedronGeometry args={[0.8, 1]} />
+        <meshBasicMaterial color={theme.particles} wireframe transparent opacity={0.15} />
+      </mesh>
+      <mesh ref={glowRef}>
+        <sphereGeometry args={[0.9, 16, 16]} />
+        <meshBasicMaterial color={theme.primary} transparent opacity={0.1} blending={THREE.AdditiveBlending} />
+      </mesh>
+    </group>
+  )
+}
+
+// ========== Outer symmetrical frequency bars ==========
 function SymmetricBars({
   analyzerData,
   mousePos,
@@ -141,20 +498,19 @@ function SymmetricBars({
       const { angle } = barData[idx]
       const freqIdx = idx % count
       const freq = frequencies[freqIdx]
-      const height = 0.2 + freq * 4
+      const height = 0.2 + freq * 5
 
       const adjustedAngle = angle + mousePos.x * 0.3
       const x = Math.cos(adjustedAngle) * radius
       const z = Math.sin(adjustedAngle) * radius
 
       mesh.position.set(x, height / 2, z)
-      mesh.scale.set(0.12 + freq * 0.06, height, 0.12 + freq * 0.06)
+      mesh.scale.set(0.15 + freq * 0.08, height, 0.15 + freq * 0.08)
       mesh.lookAt(0, mesh.position.y, 0)
 
-      // Pulse emissive based on frequency
       const mat = materialsRef.current[idx]
       if (mat) {
-        mat.emissiveIntensity = 0.2 + freq * 0.8
+        mat.emissiveIntensity = 0.3 + freq * 1.2
       }
     })
 
@@ -172,17 +528,10 @@ function SymmetricBars({
         const t = (idx % count) / count
         const color = new THREE.Color().lerpColors(primaryColor, accentColor, t)
         return (
-          <mesh
-            key={idx}
-            ref={(el) => {
-              if (el) meshesRef.current[idx] = el
-            }}
-          >
+          <mesh key={idx} ref={(el) => { if (el) meshesRef.current[idx] = el }}>
             <boxGeometry args={[1, 1, 1]} />
             <meshStandardMaterial
-              ref={(el) => {
-                if (el) materialsRef.current[idx] = el
-              }}
+              ref={(el) => { if (el) materialsRef.current[idx] = el }}
               color={color}
               metalness={0.7}
               roughness={0.15}
@@ -196,404 +545,45 @@ function SymmetricBars({
   )
 }
 
-// Inner ring of smaller, faster-moving bars
-function InnerRing({
-  analyzerData,
-  mousePos,
-  theme,
-}: {
-  analyzerData: AudioAnalyzerData | null
-  mousePos: { x: number; y: number }
-  theme: ColorTheme
-}) {
-  const groupRef = useRef<THREE.Group>(null)
-  const meshesRef = useRef<THREE.Mesh[]>([])
-  const count = 24
-
-  useFrame((state) => {
-    const time = state.clock.elapsedTime
-    const frequencies = getFrequencies(analyzerData, count, time)
-    const radius = 2.2 + mousePos.y * 0.2
-
-    meshesRef.current.forEach((mesh, idx) => {
-      if (!mesh) return
-      const angle = (idx / count) * Math.PI * 2
-      const freq = frequencies[idx % count]
-      const height = 0.1 + freq * 2
-
-      const adjustedAngle = angle - mousePos.x * 0.5
-      const x = Math.cos(adjustedAngle) * radius
-      const z = Math.sin(adjustedAngle) * radius
-
-      mesh.position.set(x, height / 2, z)
-      mesh.scale.set(0.06, height, 0.06)
-      mesh.lookAt(0, mesh.position.y, 0)
-    })
-
-    if (groupRef.current) {
-      groupRef.current.rotation.y = -time * 0.2 + mousePos.x * 0.3
-    }
-  })
-
-  const color = useMemo(() => new THREE.Color(theme.accent), [theme.accent])
-
-  return (
-    <group ref={groupRef}>
-      {Array.from({ length: count }).map((_, idx) => (
-        <mesh
-          key={idx}
-          ref={(el) => {
-            if (el) meshesRef.current[idx] = el
-          }}
-        >
-          <cylinderGeometry args={[0.5, 0.5, 1, 6]} />
-          <meshStandardMaterial
-            color={color}
-            metalness={0.8}
-            roughness={0.1}
-            emissive={color}
-            emissiveIntensity={0.5}
-            transparent
-            opacity={0.8}
-          />
-        </mesh>
-      ))}
-    </group>
-  )
-}
-
-// Central orb with warping geometry
-function CentralOrb({
+// ========== Orbiting rings that tilt and scale ==========
+function OrbitingRings({
   analyzerData,
   theme,
 }: {
   analyzerData: AudioAnalyzerData | null
   theme: ColorTheme
 }) {
-  const meshRef = useRef<THREE.Mesh>(null)
-  const glowRef = useRef<THREE.Mesh>(null)
-  const wireRef = useRef<THREE.Mesh>(null)
+  const ringsRef = useRef<THREE.Mesh[]>([])
+  const ringCount = 5
 
   useFrame((state) => {
-    if (!meshRef.current || !glowRef.current || !wireRef.current) return
-
     const time = state.clock.elapsedTime
     const bass = getBass(analyzerData, time)
+    const mids = getMids(analyzerData, time)
 
-    const scale = 0.8 + bass * 0.6
-    meshRef.current.scale.setScalar(scale)
-    glowRef.current.scale.setScalar(scale * 1.6 + Math.sin(time * 3) * 0.1)
-    wireRef.current.scale.setScalar(scale * 1.25)
+    ringsRef.current.forEach((mesh, i) => {
+      if (!mesh) return
+      const baseScale = 2.5 + i * 1.5
+      const pulse = Math.sin(time * 2.5 - i * 0.8) * bass * 0.6
+      mesh.scale.setScalar(baseScale + pulse)
 
-    meshRef.current.rotation.y = time * 0.5
-    meshRef.current.rotation.x = time * 0.3
-    wireRef.current.rotation.y = -time * 0.3
-    wireRef.current.rotation.z = time * 0.2
+      // Each ring tilts differently and rotates
+      mesh.rotation.x = Math.PI / 2 + Math.sin(time * 0.5 + i * 1.2) * 0.3
+      mesh.rotation.y = time * 0.1 * (i % 2 === 0 ? 1 : -1) + i * 0.5
+      mesh.rotation.z = Math.cos(time * 0.3 + i) * 0.2
 
-    // Warp the orb geometry vertices based on audio
-    const geom = meshRef.current.geometry
-    const pos = geom.attributes.position
-    const arr = pos.array as Float32Array
-    for (let i = 0; i < pos.count; i++) {
-      const x = arr[i * 3]
-      const y = arr[i * 3 + 1]
-      const z = arr[i * 3 + 2]
-      const len = Math.sqrt(x * x + y * y + z * z)
-      if (len > 0) {
-        const nx = x / len
-        const ny = y / len
-        const nz = z / len
-        const warp = 0.8 + Math.sin(nx * 4 + time * 3) * bass * 0.15 +
-          Math.cos(ny * 3 + time * 2) * bass * 0.1 +
-          Math.sin(nz * 5 + time * 2.5) * bass * 0.08
-        arr[i * 3] = nx * warp
-        arr[i * 3 + 1] = ny * warp
-        arr[i * 3 + 2] = nz * warp
-      }
-    }
-    pos.needsUpdate = true
+      const mat = mesh.material as THREE.MeshBasicMaterial
+      mat.opacity = (0.25 - i * 0.03) * (0.5 + bass + mids * 0.3)
+    })
   })
 
   return (
     <group>
-      <mesh ref={meshRef}>
-        <icosahedronGeometry args={[0.8, 3]} />
-        <meshStandardMaterial
-          color={theme.primary}
-          metalness={0.9}
-          roughness={0.05}
-          emissive={theme.primary}
-          emissiveIntensity={0.6}
-        />
-      </mesh>
-      <mesh ref={wireRef}>
-        <icosahedronGeometry args={[0.8, 1]} />
-        <meshBasicMaterial
-          color={theme.accent}
-          wireframe
-          transparent
-          opacity={0.3}
-        />
-      </mesh>
-      <mesh ref={glowRef}>
-        <sphereGeometry args={[0.9, 16, 16]} />
-        <meshBasicMaterial color={theme.primary} transparent opacity={0.1} />
-      </mesh>
-    </group>
-  )
-}
-
-// Orbiting particles in dual bands
-function Particles({
-  analyzerData,
-  mousePos,
-  theme,
-}: {
-  analyzerData: AudioAnalyzerData | null
-  mousePos: { x: number; y: number }
-  theme: ColorTheme
-}) {
-  const pointsRef = useRef<THREE.Points>(null)
-  const particleCount = 600
-
-  const positions = useMemo(() => {
-    const pos = new Float32Array(particleCount * 3)
-    for (let i = 0; i < particleCount; i++) {
-      const angle = (i / particleCount) * Math.PI * 2
-      const radius = 5 + Math.random() * 2
-      pos[i * 3] = Math.cos(angle) * radius
-      pos[i * 3 + 1] = (Math.random() - 0.5) * 2
-      pos[i * 3 + 2] = Math.sin(angle) * radius
-    }
-    return pos
-  }, [])
-
-  const sizes = useMemo(() => {
-    const s = new Float32Array(particleCount)
-    for (let i = 0; i < particleCount; i++) {
-      s[i] = 0.02 + Math.random() * 0.04
-    }
-    return s
-  }, [])
-
-  useFrame((state) => {
-    if (!pointsRef.current) return
-
-    const time = state.clock.elapsedTime
-    const posAttr = pointsRef.current.geometry.attributes.position
-    const arr = posAttr.array as Float32Array
-
-    let intensity = 0.3
-    if (analyzerData) {
-      analyzerData.analyser.getByteFrequencyData(analyzerData.dataArray)
-      const len = analyzerData.dataArray.length
-      let mid = 0
-      for (let i = Math.floor(len * 0.25); i < Math.floor(len * 0.75); i++) {
-        mid += analyzerData.dataArray[i] / 255
-      }
-      intensity = mid / (len * 0.5)
-    }
-
-    for (let i = 0; i < particleCount; i++) {
-      const baseAngle = (i / particleCount) * Math.PI * 2
-      const band = i < particleCount / 2 ? 0 : 1
-      const speed = band === 0 ? 0.15 : -0.1
-      const baseRadius = band === 0 ? 5.5 : 6.5
-      const angle = baseAngle + time * speed + mousePos.x * 0.3
-
-      const wobble = Math.sin(time * 2 + i * 0.02) * (0.3 + intensity * 1.5)
-      const radius = baseRadius + wobble
-
-      arr[i * 3] = Math.cos(angle) * radius
-      arr[i * 3 + 1] =
-        Math.sin(time * 1.5 + i * 0.03) * (0.5 + intensity * 2) +
-        mousePos.y * 0.5 +
-        (band === 1 ? 0.5 : -0.5)
-      arr[i * 3 + 2] = Math.sin(angle) * radius
-    }
-
-    posAttr.needsUpdate = true
-    pointsRef.current.rotation.y = time * 0.03
-  })
-
-  return (
-    <points ref={pointsRef}>
-      <bufferGeometry>
-        <bufferAttribute attach="attributes-position" count={particleCount} array={positions} itemSize={3} />
-        <bufferAttribute attach="attributes-size" count={particleCount} array={sizes} itemSize={1} />
-      </bufferGeometry>
-      <pointsMaterial
-        size={0.05}
-        color={theme.particles}
-        transparent
-        opacity={0.75}
-        sizeAttenuation
-        blending={THREE.AdditiveBlending}
-      />
-    </points>
-  )
-}
-
-// Expanding pulse rings
-function WaveRings({
-  analyzerData,
-  theme,
-}: {
-  analyzerData: AudioAnalyzerData | null
-  theme: ColorTheme
-}) {
-  const ringsRef = useRef<THREE.Group>(null)
-
-  useFrame((state) => {
-    if (!ringsRef.current) return
-    const time = state.clock.elapsedTime
-    const bass = getBass(analyzerData, time)
-
-    ringsRef.current.children.forEach((ring, i) => {
-      const mesh = ring as THREE.Mesh
-      const baseScale = 1.8 + i * 1.2
-      const pulse = Math.sin(time * 2.5 - i * 0.8) * bass * 0.5
-      mesh.scale.setScalar(baseScale + pulse)
-      mesh.rotation.z = time * 0.08 * (i % 2 === 0 ? 1 : -1)
-      const mat = mesh.material as THREE.MeshBasicMaterial
-      mat.opacity = (0.2 - i * 0.035) * (0.5 + bass)
-    })
-  })
-
-  return (
-    <group ref={ringsRef}>
-      {[0, 1, 2, 3, 4].map((i) => (
-        <mesh key={i} rotation={[Math.PI / 2, 0, 0]}>
-          <ringGeometry args={[0.95, 1, 48]} />
+      {Array.from({ length: ringCount }).map((_, i) => (
+        <mesh key={i} ref={(el) => { if (el) ringsRef.current[i] = el }}>
+          <torusGeometry args={[1, 0.01 + i * 0.003, 8, 64]} />
           <meshBasicMaterial
             color={i % 2 === 0 ? theme.primary : theme.accent}
-            transparent
-            opacity={0.2}
-            side={THREE.DoubleSide}
-          />
-        </mesh>
-      ))}
-    </group>
-  )
-}
-
-// Spiral ribbons that shoot outward
-function SpiralRibbons({
-  analyzerData,
-  theme,
-}: {
-  analyzerData: AudioAnalyzerData | null
-  theme: ColorTheme
-}) {
-  const groupRef = useRef<THREE.Group>(null)
-  const ribbonCount = 6
-  const meshesRef = useRef<THREE.Mesh[]>([])
-
-  useFrame((state) => {
-    const time = state.clock.elapsedTime
-    const bass = getBass(analyzerData, time)
-
-    meshesRef.current.forEach((mesh, i) => {
-      if (!mesh) return
-      const angle = (i / ribbonCount) * Math.PI * 2 + time * 0.3
-      const radius = 1.5 + bass * 1.5
-      const x = Math.cos(angle) * radius
-      const z = Math.sin(angle) * radius
-      const y = Math.sin(time * 2 + i * 1.2) * (0.5 + bass)
-
-      mesh.position.set(x, y, z)
-      mesh.rotation.set(time + i, time * 0.5 + i * 0.3, 0)
-      mesh.scale.set(
-        0.08 + bass * 0.12,
-        1 + bass * 3,
-        0.08 + bass * 0.12
-      )
-
-      const mat = mesh.material as THREE.MeshStandardMaterial
-      mat.emissiveIntensity = 0.4 + bass * 1.2
-    })
-
-    if (groupRef.current) {
-      groupRef.current.rotation.y = time * 0.15
-    }
-  })
-
-  return (
-    <group ref={groupRef}>
-      {Array.from({ length: ribbonCount }).map((_, i) => {
-        const t = i / ribbonCount
-        const color = new THREE.Color().lerpColors(
-          new THREE.Color(theme.primary),
-          new THREE.Color(theme.accent),
-          t
-        )
-        return (
-          <mesh
-            key={i}
-            ref={(el) => {
-              if (el) meshesRef.current[i] = el
-            }}
-          >
-            <octahedronGeometry args={[0.5, 0]} />
-            <meshStandardMaterial
-              color={color}
-              emissive={color}
-              emissiveIntensity={0.5}
-              metalness={0.9}
-              roughness={0.1}
-              transparent
-              opacity={0.85}
-            />
-          </mesh>
-        )
-      })}
-    </group>
-  )
-}
-
-// Pulsing outer rings that expand and contract
-function PulseRays({
-  analyzerData,
-  theme,
-}: {
-  analyzerData: AudioAnalyzerData | null
-  theme: ColorTheme
-}) {
-  const raysRef = useRef<THREE.Mesh[]>([])
-  const rayCount = 12
-
-  useFrame((state) => {
-    const time = state.clock.elapsedTime
-    const bass = getBass(analyzerData, time)
-
-    raysRef.current.forEach((mesh, i) => {
-      if (!mesh) return
-      const angle = (i / rayCount) * Math.PI * 2
-      const reach = 3 + bass * 4 + Math.sin(time * 3 + i) * 0.5
-      const x = Math.cos(angle) * reach * 0.5
-      const z = Math.sin(angle) * reach * 0.5
-
-      mesh.position.set(x, 0, z)
-      mesh.rotation.z = angle + Math.PI / 2
-      mesh.scale.set(0.02 + bass * 0.02, reach, 0.02)
-
-      const mat = mesh.material as THREE.MeshBasicMaterial
-      mat.opacity = 0.15 + bass * 0.3
-    })
-  })
-
-  return (
-    <group>
-      {Array.from({ length: rayCount }).map((_, i) => (
-        <mesh
-          key={i}
-          ref={(el) => {
-            if (el) raysRef.current[i] = el
-          }}
-        >
-          <boxGeometry args={[1, 1, 1]} />
-          <meshBasicMaterial
-            color={i % 2 === 0 ? theme.primary : theme.particles}
             transparent
             opacity={0.2}
             blending={THREE.AdditiveBlending}
@@ -604,7 +594,195 @@ function PulseRays({
   )
 }
 
-// Ground grid plane
+// ========== Spiral ribbons ==========
+function SpiralRibbons({
+  analyzerData,
+  theme,
+}: {
+  analyzerData: AudioAnalyzerData | null
+  theme: ColorTheme
+}) {
+  const groupRef = useRef<THREE.Group>(null)
+  const meshesRef = useRef<THREE.Mesh[]>([])
+  const ribbonCount = 8
+
+  useFrame((state) => {
+    const time = state.clock.elapsedTime
+    const bass = getBass(analyzerData, time)
+    const highs = getHighs(analyzerData, time)
+
+    meshesRef.current.forEach((mesh, i) => {
+      if (!mesh) return
+      const angle = (i / ribbonCount) * Math.PI * 2 + time * 0.4
+      const radius = 1.8 + bass * 2 + Math.sin(time * 3 + i * 0.9) * 0.3
+      const x = Math.cos(angle) * radius
+      const z = Math.sin(angle) * radius
+      const y = Math.sin(time * 2.5 + i * (Math.PI * 2 / ribbonCount)) * (0.8 + bass)
+
+      mesh.position.set(x, y, z)
+      mesh.rotation.set(time * 1.5 + i, time * 0.7 + i * 0.4, time * 0.3)
+      const stretch = 1 + bass * 3.5 + highs * 1.5
+      mesh.scale.set(0.08 + highs * 0.08, stretch, 0.08 + highs * 0.08)
+
+      const mat = mesh.material as THREE.MeshStandardMaterial
+      mat.emissiveIntensity = 0.5 + bass * 1.5
+    })
+
+    if (groupRef.current) {
+      groupRef.current.rotation.y = time * 0.2
+    }
+  })
+
+  const primaryColor = useMemo(() => new THREE.Color(theme.primary), [theme.primary])
+  const accentColor = useMemo(() => new THREE.Color(theme.accent), [theme.accent])
+
+  return (
+    <group ref={groupRef}>
+      {Array.from({ length: ribbonCount }).map((_, i) => {
+        const t = i / ribbonCount
+        const color = new THREE.Color().lerpColors(primaryColor, accentColor, t)
+        return (
+          <mesh key={i} ref={(el) => { if (el) meshesRef.current[i] = el }}>
+            <octahedronGeometry args={[0.4, 0]} />
+            <meshStandardMaterial color={color} emissive={color} emissiveIntensity={0.5} metalness={0.95} roughness={0.05} transparent opacity={0.9} />
+          </mesh>
+        )
+      })}
+    </group>
+  )
+}
+
+// ========== Energy beams from center ==========
+function EnergyBeams({
+  analyzerData,
+  theme,
+}: {
+  analyzerData: AudioAnalyzerData | null
+  theme: ColorTheme
+}) {
+  const beamsRef = useRef<THREE.Mesh[]>([])
+  const beamCount = 16
+  const groupRef = useRef<THREE.Group>(null)
+
+  useFrame((state) => {
+    const time = state.clock.elapsedTime
+    const bass = getBass(analyzerData, time)
+    const frequencies = getFrequencies(analyzerData, beamCount, time)
+
+    beamsRef.current.forEach((mesh, i) => {
+      if (!mesh) return
+      const angle = (i / beamCount) * Math.PI * 2
+      const freq = frequencies[i]
+      const reach = 2 + freq * 6 + bass * 2
+      const x = Math.cos(angle) * reach * 0.5
+      const z = Math.sin(angle) * reach * 0.5
+      const y = Math.sin(time * 2 + i * 0.5) * freq * 0.8
+
+      mesh.position.set(x, y, z)
+      mesh.rotation.z = angle + Math.PI / 2
+      mesh.rotation.x = Math.sin(time + i) * 0.2
+      mesh.scale.set(0.015 + freq * 0.02, reach, 0.015 + freq * 0.02)
+
+      const mat = mesh.material as THREE.MeshBasicMaterial
+      mat.opacity = 0.08 + freq * 0.35
+    })
+
+    if (groupRef.current) {
+      groupRef.current.rotation.y = time * 0.05
+    }
+  })
+
+  return (
+    <group ref={groupRef}>
+      {Array.from({ length: beamCount }).map((_, i) => (
+        <mesh key={i} ref={(el) => { if (el) beamsRef.current[i] = el }}>
+          <boxGeometry args={[1, 1, 1]} />
+          <meshBasicMaterial
+            color={i % 3 === 0 ? theme.primary : i % 3 === 1 ? theme.accent : theme.particles}
+            transparent
+            opacity={0.15}
+            blending={THREE.AdditiveBlending}
+          />
+        </mesh>
+      ))}
+    </group>
+  )
+}
+
+// ========== Particles ==========
+function Particles({
+  analyzerData,
+  mousePos,
+  theme,
+}: {
+  analyzerData: AudioAnalyzerData | null
+  mousePos: { x: number; y: number }
+  theme: ColorTheme
+}) {
+  const pointsRef = useRef<THREE.Points>(null)
+  const particleCount = 500
+
+  const positions = useMemo(() => {
+    const pos = new Float32Array(particleCount * 3)
+    for (let i = 0; i < particleCount; i++) {
+      const angle = (i / particleCount) * Math.PI * 2
+      const radius = 5 + Math.random() * 3
+      pos[i * 3] = Math.cos(angle) * radius
+      pos[i * 3 + 1] = (Math.random() - 0.5) * 4
+      pos[i * 3 + 2] = Math.sin(angle) * radius
+    }
+    return pos
+  }, [])
+
+  useFrame((state) => {
+    if (!pointsRef.current) return
+    const time = state.clock.elapsedTime
+    const posAttr = pointsRef.current.geometry.attributes.position
+    const arr = posAttr.array as Float32Array
+
+    const bass = getBass(analyzerData, time)
+    const highs = getHighs(analyzerData, time)
+
+    for (let i = 0; i < particleCount; i++) {
+      const baseAngle = (i / particleCount) * Math.PI * 2
+      const band = i < particleCount / 2 ? 0 : 1
+      const speed = band === 0 ? 0.2 : -0.12
+      const baseRadius = band === 0 ? 5.5 : 7
+      const angle = baseAngle + time * speed + mousePos.x * 0.4
+
+      const wobble = Math.sin(time * 2.5 + i * 0.02) * (0.4 + bass * 2)
+      const radius = baseRadius + wobble
+
+      arr[i * 3] = Math.cos(angle) * radius
+      arr[i * 3 + 1] =
+        Math.sin(time * 1.5 + i * 0.04) * (0.8 + bass * 2.5 + highs * 1.5) +
+        mousePos.y * 0.5 +
+        (band === 1 ? 1 : -1)
+      arr[i * 3 + 2] = Math.sin(angle) * radius
+    }
+
+    posAttr.needsUpdate = true
+    pointsRef.current.rotation.y = time * 0.04
+  })
+
+  return (
+    <points ref={pointsRef}>
+      <bufferGeometry>
+        <bufferAttribute attach="attributes-position" count={particleCount} array={positions} itemSize={3} />
+      </bufferGeometry>
+      <pointsMaterial
+        size={0.06}
+        color={theme.particles}
+        transparent
+        opacity={0.75}
+        sizeAttenuation
+        blending={THREE.AdditiveBlending}
+      />
+    </points>
+  )
+}
+
+// ========== Ground grid ==========
 function GroundGrid({
   analyzerData,
   theme,
@@ -620,22 +798,23 @@ function GroundGrid({
     const bass = getBass(analyzerData, time)
     const mat = gridRef.current.material as THREE.Material
     if ("opacity" in mat) {
-      ;(mat as THREE.MeshBasicMaterial).opacity = 0.08 + bass * 0.12
+      ;(mat as THREE.MeshBasicMaterial).opacity = 0.06 + bass * 0.15
     }
-    gridRef.current.position.y = -2 - bass * 0.3
+    gridRef.current.position.y = -3 - bass * 0.4
   })
 
   return (
     <gridHelper
       ref={gridRef}
-      args={[30, 30, theme.primary, theme.accent]}
-      position={[0, -2, 0]}
+      args={[40, 40, theme.primary, theme.accent]}
+      position={[0, -3, 0]}
       material-transparent={true}
-      material-opacity={0.1}
+      material-opacity={0.08}
     />
   )
 }
 
+// ========== Scene ==========
 function Scene({
   analyzerData,
   mousePos,
@@ -649,10 +828,11 @@ function Scene({
 
   useFrame((state) => {
     const time = state.clock.elapsedTime
-    const breathe = Math.sin(time * 0.4) * 0.5
-    const targetX = mousePos.x * 4
+    const breathe = Math.sin(time * 0.4) * 0.6
+    const sway = Math.cos(time * 0.3) * 0.3
+    const targetX = mousePos.x * 5 + sway
     const targetY = 3.5 + mousePos.y * 3 + breathe
-    const targetZ = 9 + Math.sin(time * 0.25) * 1.5
+    const targetZ = 10 + Math.sin(time * 0.2) * 2
 
     camera.position.x = THREE.MathUtils.lerp(camera.position.x, targetX, 0.025)
     camera.position.y = THREE.MathUtils.lerp(camera.position.y, targetY, 0.025)
@@ -662,22 +842,24 @@ function Scene({
 
   return (
     <>
-      <color attach="background" args={["#050508"]} />
-      <fog attach="fog" args={["#050508", 10, 30]} />
+      <color attach="background" args={["#030306"]} />
+      <fog attach="fog" args={["#030306", 12, 35]} />
 
-      <ambientLight intensity={0.15} />
-      <pointLight position={[0, 6, 0]} intensity={1.5} color={theme.primary} distance={20} />
-      <pointLight position={[6, 2, 6]} intensity={0.8} color={theme.accent} distance={15} />
-      <pointLight position={[-6, 2, -6]} intensity={0.8} color={theme.particles} distance={15} />
-      <pointLight position={[0, -3, 0]} intensity={0.4} color={theme.primary} distance={10} />
+      <ambientLight intensity={0.1} />
+      <pointLight position={[0, 8, 0]} intensity={2} color={theme.primary} distance={25} />
+      <pointLight position={[8, 3, 8]} intensity={1} color={theme.accent} distance={20} />
+      <pointLight position={[-8, 3, -8]} intensity={1} color={theme.particles} distance={20} />
+      <pointLight position={[0, -4, 0]} intensity={0.6} color={theme.primary} distance={15} />
 
+      <ShaderBackground analyzerData={analyzerData} theme={theme} />
       <CentralOrb analyzerData={analyzerData} theme={theme} />
       <SpiralRibbons analyzerData={analyzerData} theme={theme} />
-      <PulseRays analyzerData={analyzerData} theme={theme} />
-      <InnerRing analyzerData={analyzerData} mousePos={mousePos} theme={theme} />
+      <OrbitingRings analyzerData={analyzerData} theme={theme} />
+      <EnergyBeams analyzerData={analyzerData} theme={theme} />
+      <DNAHelix analyzerData={analyzerData} theme={theme} mousePos={mousePos} />
+      <DNAHelixMirror analyzerData={analyzerData} theme={theme} mousePos={mousePos} />
       <SymmetricBars analyzerData={analyzerData} mousePos={mousePos} theme={theme} />
       <Particles analyzerData={analyzerData} mousePos={mousePos} theme={theme} />
-      <WaveRings analyzerData={analyzerData} theme={theme} />
       <GroundGrid analyzerData={analyzerData} theme={theme} />
     </>
   )
@@ -701,21 +883,16 @@ export default function AudioVisualizer() {
   }, [])
 
   return (
-    <div className="w-full h-screen relative overflow-hidden bg-[#050508]">
+    <div className="w-full h-screen relative overflow-hidden bg-[#030306]">
       <Canvas
         camera={{ position: [0, 4, 10], fov: 60 }}
-        gl={{
-          antialias: false,
-          powerPreference: "default",
-          alpha: false,
-        }}
+        gl={{ antialias: false, powerPreference: "default", alpha: false }}
         dpr={[1, 1.5]}
       >
         <Scene analyzerData={analyzerData} mousePos={mousePos} theme={theme} />
       </Canvas>
 
       <div className="absolute inset-0 pointer-events-none">
-        {/* Title */}
         <div className="absolute top-8 left-1/2 -translate-x-1/2 text-center">
           <h1 className="text-4xl font-bold tracking-tight text-white mb-1 drop-shadow-lg">
             Audio Visualizer
@@ -725,7 +902,6 @@ export default function AudioVisualizer() {
           </p>
         </div>
 
-        {/* Theme Switcher */}
         <div className="absolute top-8 right-8 flex gap-2 pointer-events-auto">
           {COLOR_THEMES.map((t) => (
             <button
@@ -738,10 +914,7 @@ export default function AudioVisualizer() {
               }`}
               style={{
                 backgroundColor: t.primary,
-                boxShadow:
-                  theme.name === t.name
-                    ? `0 0 16px ${t.primary}80`
-                    : "none",
+                boxShadow: theme.name === t.name ? `0 0 16px ${t.primary}80` : "none",
               }}
               title={t.name}
               aria-label={`Switch to ${t.name} theme`}
@@ -749,22 +922,14 @@ export default function AudioVisualizer() {
           ))}
         </div>
 
-        {/* Mic Button */}
         <div className="absolute bottom-8 left-1/2 -translate-x-1/2 pointer-events-auto">
           <button
             onClick={() => setIsListening(!isListening)}
             className="px-8 py-4 rounded-full font-semibold text-lg transition-all duration-300 backdrop-blur-sm"
             style={
               isListening
-                ? {
-                    backgroundColor: theme.primary,
-                    color: "#fff",
-                    boxShadow: `0 0 30px ${theme.primary}80`,
-                  }
-                : {
-                    backgroundColor: "rgba(255,255,255,0.08)",
-                    color: "#fff",
-                  }
+                ? { backgroundColor: theme.primary, color: "#fff", boxShadow: `0 0 30px ${theme.primary}80` }
+                : { backgroundColor: "rgba(255,255,255,0.08)", color: "#fff" }
             }
           >
             {isListening ? "Stop Listening" : "Start Microphone"}
@@ -774,14 +939,8 @@ export default function AudioVisualizer() {
         {isListening && (
           <div className="absolute bottom-28 left-1/2 -translate-x-1/2">
             <div className="flex items-center gap-2">
-              <span
-                className="w-3 h-3 rounded-full animate-pulse"
-                style={{ backgroundColor: theme.primary }}
-              />
-              <span
-                className="text-sm font-medium"
-                style={{ color: theme.primary }}
-              >
+              <span className="w-3 h-3 rounded-full animate-pulse" style={{ backgroundColor: theme.primary }} />
+              <span className="text-sm font-medium" style={{ color: theme.primary }}>
                 Listening to microphone
               </span>
             </div>
