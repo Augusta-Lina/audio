@@ -13,13 +13,14 @@ interface ColorTheme {
   particles: string
 }
 
-const COLOR_THEMES: ColorTheme[] = [
-  { name: "Neon", primary: "#ff1a5c", accent: "#c084fc", particles: "#3b82f6" },
-  { name: "Ocean", primary: "#06b6d4", accent: "#0ea5e9", particles: "#22d3ee" },
-  { name: "Sunset", primary: "#f97316", accent: "#fbbf24", particles: "#ef4444" },
-  { name: "Forest", primary: "#22c55e", accent: "#84cc16", particles: "#10b981" },
-  { name: "Violet", primary: "#a855f7", accent: "#ec4899", particles: "#6366f1" },
-]
+// Prismatic / chromatic aberration palette inspired by light refraction
+const PRISMATIC_THEME: ColorTheme = {
+  name: "Prismatic",
+  primary: "#70a8d0",   // cool blue-white
+  accent: "#d4a050",    // warm amber/gold
+  particles: "#c03040", // deep crimson
+}
+
 
 interface AudioAnalyzerData {
   analyser: AnalyserNode
@@ -279,8 +280,10 @@ class VoidShaderMaterial extends THREE.ShaderMaterial {
       uniforms: {
         uTime: { value: 0 },
         uBass: { value: 0 },
-        uColor1: { value: new THREE.Color("#ff1a5c") },
-        uColor2: { value: new THREE.Color("#c084fc") },
+        uMids: { value: 0 },
+        uColor1: { value: new THREE.Color("#70a8d0") },
+        uColor2: { value: new THREE.Color("#d4a050") },
+        uColor3: { value: new THREE.Color("#c03040") },
       },
       vertexShader: `
         varying vec2 vUv;
@@ -292,25 +295,50 @@ class VoidShaderMaterial extends THREE.ShaderMaterial {
       fragmentShader: `
         uniform float uTime;
         uniform float uBass;
+        uniform float uMids;
         uniform vec3 uColor1;
         uniform vec3 uColor2;
+        uniform vec3 uColor3;
         varying vec2 vUv;
-        
+
         void main() {
           vec2 uv = vUv - 0.5;
           float dist = length(uv);
           float angle = atan(uv.y, uv.x);
-          
-          float ring = sin(dist * 20.0 - uTime * 2.0) * 0.5 + 0.5;
-          ring *= smoothstep(0.5, 0.15, dist);
-          
-          float spiral = sin(angle * 6.0 + dist * 15.0 - uTime * 3.0) * 0.5 + 0.5;
-          spiral *= smoothstep(0.5, 0.1, dist);
-          
-          float pattern = ring * 0.5 + spiral * 0.5;
-          pattern *= uBass * 0.4 + 0.08;
-          
-          vec3 color = mix(uColor1, uColor2, spiral) * pattern;
+
+          // Chromatic aberration - sample offset per channel
+          float offset = 0.008 + uBass * 0.012;
+          vec2 uvR = uv * (1.0 + offset);
+          vec2 uvB = uv * (1.0 - offset);
+
+          // Soft central glow with prismatic fringing
+          float glowR = exp(-length(uvR) * 4.0);
+          float glowG = exp(-dist * 4.5);
+          float glowB = exp(-length(uvB) * 5.0);
+
+          // Breathing ring
+          float ringDist = abs(dist - 0.18 - uBass * 0.06);
+          float ring = exp(-ringDist * ringDist * 200.0) * 0.25;
+
+          // Subtle spiral nebula
+          float spiral = sin(angle * 4.0 + dist * 12.0 - uTime * 1.2) * 0.5 + 0.5;
+          spiral *= smoothstep(0.45, 0.05, dist) * 0.06;
+          spiral *= (0.3 + uMids * 0.6);
+
+          // Combine - each channel slightly offset for chromatic look
+          float r = glowR * 0.04 + ring * 0.8 + spiral * 0.6;
+          float g = glowG * 0.05 + ring * 0.5 + spiral * 0.4;
+          float b = glowB * 0.08 + ring * 0.9 + spiral * 0.8;
+
+          // Tint with theme colors
+          vec3 color = vec3(r, g, b) * (uBass * 0.5 + 0.15);
+          color += uColor1 * glowG * 0.03;
+          color += uColor2 * ring * 0.04;
+          color += uColor3 * spiral * 0.02;
+
+          // Strong vignette to deep black edges
+          color *= smoothstep(0.55, 0.0, dist * 0.7);
+
           gl_FragColor = vec4(color, 1.0);
         }
       `,
@@ -336,8 +364,10 @@ function ShaderBackground({
     const time = state.clock.elapsedTime
     matRef.current.uniforms.uTime.value = time
     matRef.current.uniforms.uBass.value = getBass(analyzerData, time)
+    matRef.current.uniforms.uMids.value = getMids(analyzerData, time)
     matRef.current.uniforms.uColor1.value.set(theme.primary)
     matRef.current.uniforms.uColor2.value.set(theme.accent)
+    matRef.current.uniforms.uColor3.value.set(theme.particles)
   })
 
   return (
@@ -417,19 +447,19 @@ function DNAHelix({
       {Array.from({ length: nodeCount }).map((_, i) => (
         <mesh key={`s1-${i}`} ref={(el) => { if (el) strand1Ref.current[i] = el }}>
           <sphereGeometry args={[1, 8, 8]} />
-          <meshStandardMaterial color={theme.primary} emissive={theme.primary} emissiveIntensity={0.8} metalness={0.9} roughness={0.1} />
+          <meshStandardMaterial color={theme.primary} emissive={theme.primary} emissiveIntensity={0.5} metalness={0.95} roughness={0.05} />
         </mesh>
       ))}
       {Array.from({ length: nodeCount }).map((_, i) => (
         <mesh key={`s2-${i}`} ref={(el) => { if (el) strand2Ref.current[i] = el }}>
           <sphereGeometry args={[1, 8, 8]} />
-          <meshStandardMaterial color={theme.accent} emissive={theme.accent} emissiveIntensity={0.8} metalness={0.9} roughness={0.1} />
+          <meshStandardMaterial color={theme.accent} emissive={theme.accent} emissiveIntensity={0.5} metalness={0.95} roughness={0.05} />
         </mesh>
       ))}
       {Array.from({ length: connectorCount }).map((_, i) => (
         <mesh key={`c-${i}`} ref={(el) => { if (el) connectorsRef.current[i] = el }}>
           <boxGeometry args={[1, 1, 1]} />
-          <meshBasicMaterial color={theme.particles} transparent opacity={0.4} blending={THREE.AdditiveBlending} />
+          <meshBasicMaterial color="#80a8c8" transparent opacity={0.2} blending={THREE.AdditiveBlending} />
         </mesh>
       ))}
     </group>
@@ -504,19 +534,19 @@ function DNAHelixMirror({
       {Array.from({ length: nodeCount }).map((_, i) => (
         <mesh key={`s1m-${i}`} ref={(el) => { if (el) strand1Ref.current[i] = el }}>
           <sphereGeometry args={[1, 8, 8]} />
-          <meshStandardMaterial color={theme.accent} emissive={theme.accent} emissiveIntensity={0.8} metalness={0.9} roughness={0.1} />
+          <meshStandardMaterial color={theme.accent} emissive={theme.accent} emissiveIntensity={0.5} metalness={0.95} roughness={0.05} />
         </mesh>
       ))}
       {Array.from({ length: nodeCount }).map((_, i) => (
         <mesh key={`s2m-${i}`} ref={(el) => { if (el) strand2Ref.current[i] = el }}>
           <sphereGeometry args={[1, 8, 8]} />
-          <meshStandardMaterial color={theme.primary} emissive={theme.primary} emissiveIntensity={0.8} metalness={0.9} roughness={0.1} />
+          <meshStandardMaterial color={theme.primary} emissive={theme.primary} emissiveIntensity={0.5} metalness={0.95} roughness={0.05} />
         </mesh>
       ))}
       {Array.from({ length: connectorCount }).map((_, i) => (
         <mesh key={`cm-${i}`} ref={(el) => { if (el) connectorsRef.current[i] = el }}>
           <boxGeometry args={[1, 1, 1]} />
-          <meshBasicMaterial color={theme.particles} transparent opacity={0.4} blending={THREE.AdditiveBlending} />
+          <meshBasicMaterial color="#80a8c8" transparent opacity={0.2} blending={THREE.AdditiveBlending} />
         </mesh>
       ))}
     </group>
@@ -533,18 +563,22 @@ function CentralOrb({
 }) {
   const meshRef = useRef<THREE.Mesh>(null)
   const glowRef = useRef<THREE.Mesh>(null)
+  const glow2Ref = useRef<THREE.Mesh>(null)
+  const glow3Ref = useRef<THREE.Mesh>(null)
   const wireRef = useRef<THREE.Mesh>(null)
   const wire2Ref = useRef<THREE.Mesh>(null)
 
   useFrame((state) => {
-    if (!meshRef.current || !glowRef.current || !wireRef.current || !wire2Ref.current) return
+    if (!meshRef.current || !glowRef.current || !glow2Ref.current || !glow3Ref.current || !wireRef.current || !wire2Ref.current) return
     const time = state.clock.elapsedTime
     const bass = getBass(analyzerData, time)
     const mids = getMids(analyzerData, time)
 
     const scale = 0.9 + bass * 0.7
     meshRef.current.scale.setScalar(scale)
-    glowRef.current.scale.setScalar(scale * 2 + Math.sin(time * 3) * 0.15)
+    glowRef.current.scale.setScalar(scale * 2.5 + Math.sin(time * 3) * 0.15)
+    glow2Ref.current.scale.setScalar(scale * 3.5 + Math.sin(time * 2.2) * 0.2)
+    glow3Ref.current.scale.setScalar(scale * 5.0 + Math.cos(time * 1.8) * 0.3)
     wireRef.current.scale.setScalar(scale * 1.3)
     wire2Ref.current.scale.setScalar(scale * 1.6)
 
@@ -581,26 +615,39 @@ function CentralOrb({
     pos.needsUpdate = true
 
     const glowMat = glowRef.current.material as THREE.MeshBasicMaterial
-    glowMat.opacity = 0.06 + bass * 0.1
+    glowMat.opacity = 0.06 + bass * 0.12
+    const glow2Mat = glow2Ref.current.material as THREE.MeshBasicMaterial
+    glow2Mat.opacity = 0.03 + bass * 0.06
+    const glow3Mat = glow3Ref.current.material as THREE.MeshBasicMaterial
+    glow3Mat.opacity = 0.015 + bass * 0.03
   })
 
   return (
     <group>
       <mesh ref={meshRef}>
         <icosahedronGeometry args={[0.8, 3]} />
-        <meshStandardMaterial color={theme.primary} metalness={0.95} roughness={0.02} emissive={theme.primary} emissiveIntensity={0.8} />
+        <meshStandardMaterial color="#c0d8e8" metalness={0.98} roughness={0.01} emissive="#a0c4e0" emissiveIntensity={0.6} />
       </mesh>
       <mesh ref={wireRef}>
         <icosahedronGeometry args={[0.8, 1]} />
-        <meshBasicMaterial color={theme.accent} wireframe transparent opacity={0.35} />
+        <meshBasicMaterial color={theme.primary} wireframe transparent opacity={0.2} blending={THREE.AdditiveBlending} />
       </mesh>
       <mesh ref={wire2Ref}>
         <octahedronGeometry args={[0.8, 1]} />
-        <meshBasicMaterial color={theme.particles} wireframe transparent opacity={0.15} />
+        <meshBasicMaterial color={theme.accent} wireframe transparent opacity={0.08} blending={THREE.AdditiveBlending} />
       </mesh>
+      {/* Layered glow for soft prismatic diffusion */}
       <mesh ref={glowRef}>
         <sphereGeometry args={[0.9, 16, 16]} />
-        <meshBasicMaterial color={theme.primary} transparent opacity={0.1} blending={THREE.AdditiveBlending} />
+        <meshBasicMaterial color="#c0d8ff" transparent opacity={0.08} blending={THREE.AdditiveBlending} />
+      </mesh>
+      <mesh ref={glow2Ref}>
+        <sphereGeometry args={[0.9, 16, 16]} />
+        <meshBasicMaterial color={theme.accent} transparent opacity={0.03} blending={THREE.AdditiveBlending} />
+      </mesh>
+      <mesh ref={glow3Ref}>
+        <sphereGeometry args={[0.9, 12, 12]} />
+        <meshBasicMaterial color={theme.particles} transparent opacity={0.015} blending={THREE.AdditiveBlending} />
       </mesh>
     </group>
   )
@@ -654,7 +701,7 @@ function SymmetricBars({
 
       const mat = materialsRef.current[idx]
       if (mat) {
-        mat.emissiveIntensity = 0.3 + freq * 1.2
+        mat.emissiveIntensity = 0.2 + freq * 0.8
       }
     })
 
@@ -677,10 +724,12 @@ function SymmetricBars({
             <meshStandardMaterial
               ref={(el) => { if (el) materialsRef.current[idx] = el }}
               color={color}
-              metalness={0.7}
-              roughness={0.15}
+              metalness={0.95}
+              roughness={0.05}
               emissive={color}
-              emissiveIntensity={0.3}
+              emissiveIntensity={0.2}
+              transparent
+              opacity={0.85}
             />
           </mesh>
         )
@@ -717,7 +766,7 @@ function OrbitingRings({
       mesh.rotation.z = Math.cos(time * 0.3 + i) * 0.2
 
       const mat = mesh.material as THREE.MeshBasicMaterial
-      mat.opacity = (0.25 - i * 0.03) * (0.5 + bass + mids * 0.3)
+      mat.opacity = (0.15 - i * 0.02) * (0.4 + bass * 0.8 + mids * 0.2)
     })
   })
 
@@ -727,9 +776,9 @@ function OrbitingRings({
         <mesh key={i} ref={(el) => { if (el) ringsRef.current[i] = el }}>
           <torusGeometry args={[1, 0.01 + i * 0.003, 8, 64]} />
           <meshBasicMaterial
-            color={i % 2 === 0 ? theme.primary : theme.accent}
+            color={i % 3 === 0 ? "#90b8e0" : i % 3 === 1 ? theme.accent : theme.particles}
             transparent
-            opacity={0.2}
+            opacity={0.12}
             blending={THREE.AdditiveBlending}
           />
         </mesh>
@@ -769,7 +818,7 @@ function SpiralRibbons({
       mesh.scale.set(0.08 + highs * 0.08, stretch, 0.08 + highs * 0.08)
 
       const mat = mesh.material as THREE.MeshStandardMaterial
-      mat.emissiveIntensity = 0.5 + bass * 1.5
+      mat.emissiveIntensity = 0.3 + bass * 1.0
     })
 
     if (groupRef.current) {
@@ -788,7 +837,7 @@ function SpiralRibbons({
         return (
           <mesh key={i} ref={(el) => { if (el) meshesRef.current[i] = el }}>
             <octahedronGeometry args={[0.4, 0]} />
-            <meshStandardMaterial color={color} emissive={color} emissiveIntensity={0.5} metalness={0.95} roughness={0.05} transparent opacity={0.9} />
+            <meshStandardMaterial color={color} emissive={color} emissiveIntensity={0.3} metalness={0.98} roughness={0.02} transparent opacity={0.8} />
           </mesh>
         )
       })}
@@ -828,7 +877,7 @@ function EnergyBeams({
       mesh.scale.set(0.015 + freq * 0.02, reach, 0.015 + freq * 0.02)
 
       const mat = mesh.material as THREE.MeshBasicMaterial
-      mat.opacity = 0.08 + freq * 0.35
+      mat.opacity = 0.04 + freq * 0.2
     })
 
     if (groupRef.current) {
@@ -842,9 +891,9 @@ function EnergyBeams({
         <mesh key={i} ref={(el) => { if (el) beamsRef.current[i] = el }}>
           <boxGeometry args={[1, 1, 1]} />
           <meshBasicMaterial
-            color={i % 3 === 0 ? theme.primary : i % 3 === 1 ? theme.accent : theme.particles}
+            color={i % 3 === 0 ? "#90b8d8" : i % 3 === 1 ? "#d4a050" : "#c03040"}
             transparent
-            opacity={0.15}
+            opacity={0.06}
             blending={THREE.AdditiveBlending}
           />
         </mesh>
@@ -915,10 +964,10 @@ function Particles({
         <bufferAttribute attach="attributes-position" count={particleCount} array={positions} itemSize={3} />
       </bufferGeometry>
       <pointsMaterial
-        size={0.06}
-        color={theme.particles}
+        size={0.04}
+        color={theme.primary}
         transparent
-        opacity={0.75}
+        opacity={0.5}
         sizeAttenuation
         blending={THREE.AdditiveBlending}
       />
@@ -942,7 +991,7 @@ function GroundGrid({
     const bass = getBass(analyzerData, time)
     const mat = gridRef.current.material as THREE.Material
     if ("opacity" in mat) {
-      ;(mat as THREE.MeshBasicMaterial).opacity = 0.06 + bass * 0.15
+      ;(mat as THREE.MeshBasicMaterial).opacity = 0.03 + bass * 0.08
     }
     gridRef.current.position.y = -3 - bass * 0.4
   })
@@ -953,7 +1002,7 @@ function GroundGrid({
       args={[40, 40, theme.primary, theme.accent]}
       position={[0, -3, 0]}
       material-transparent={true}
-      material-opacity={0.08}
+      material-opacity={0.04}
     />
   )
 }
@@ -986,14 +1035,14 @@ function Scene({
 
   return (
     <>
-      <color attach="background" args={["#030306"]} />
-      <fog attach="fog" args={["#030306", 12, 35]} />
+      <color attach="background" args={["#010104"]} />
+      <fog attach="fog" args={["#010104", 14, 38]} />
 
-      <ambientLight intensity={0.1} />
-      <pointLight position={[0, 8, 0]} intensity={2} color={theme.primary} distance={25} />
-      <pointLight position={[8, 3, 8]} intensity={1} color={theme.accent} distance={20} />
-      <pointLight position={[-8, 3, -8]} intensity={1} color={theme.particles} distance={20} />
-      <pointLight position={[0, -4, 0]} intensity={0.6} color={theme.primary} distance={15} />
+      <ambientLight intensity={0.04} />
+      <pointLight position={[0, 8, 0]} intensity={1.5} color="#90b8e0" distance={25} />
+      <pointLight position={[8, 3, 8]} intensity={0.8} color={theme.accent} distance={20} />
+      <pointLight position={[-8, 3, -8]} intensity={0.6} color={theme.particles} distance={20} />
+      <pointLight position={[0, -4, 0]} intensity={0.3} color="#a0c0d8" distance={15} />
 
       <ShaderBackground analyzerData={analyzerData} theme={theme} />
       <CentralOrb analyzerData={analyzerData} theme={theme} />
@@ -1012,7 +1061,7 @@ function Scene({
 export default function AudioVisualizer() {
   const [fileName, setFileName] = useState<string | null>(null)
   const [mousePos, setMousePos] = useState({ x: 0, y: 0 })
-  const [theme, setTheme] = useState<ColorTheme>(COLOR_THEMES[0])
+  const theme = PRISMATIC_THEME
   const fileInputRef = useRef<HTMLInputElement>(null)
   const audioRef = useRef<HTMLAudioElement>(null)
   const { analyzerData, error, loadFile, startMic, stop, audioMode } = useAudioAnalyzer(audioRef)
@@ -1062,7 +1111,7 @@ export default function AudioVisualizer() {
   }, [])
 
   return (
-    <div className="w-full h-screen relative overflow-hidden bg-[#030306]">
+    <div className="w-full h-screen relative overflow-hidden bg-[#010104]">
       <Canvas
         camera={{ position: [0, 4, 10], fov: 60 }}
         gl={{ antialias: false, powerPreference: "default", alpha: false }}
@@ -1082,32 +1131,12 @@ export default function AudioVisualizer() {
       )}
 
       <div className="absolute inset-0 pointer-events-none">
-        <div className="absolute top-8 right-8 flex gap-2 pointer-events-auto">
-          {COLOR_THEMES.map((t) => (
-            <button
-              key={t.name}
-              onClick={() => setTheme(t)}
-              className={`w-8 h-8 rounded-full transition-all ${
-                theme.name === t.name
-                  ? "border-2 border-white scale-110 shadow-lg"
-                  : "border-2 border-white/20 hover:scale-105 hover:border-white/50"
-              }`}
-              style={{
-                backgroundColor: t.primary,
-                boxShadow: theme.name === t.name ? `0 0 16px ${t.primary}80` : "none",
-              }}
-              title={t.name}
-              aria-label={`Switch to ${t.name} theme`}
-            />
-          ))}
-        </div>
-
         <div className="absolute bottom-8 left-1/2 -translate-x-1/2 pointer-events-auto flex flex-col items-center gap-3">
           {/* Status indicator */}
           {audioMode !== "off" && (
             <div className="flex items-center gap-2 mb-1">
-              <span className="w-2.5 h-2.5 rounded-full animate-pulse" style={{ backgroundColor: theme.primary }} />
-              <span className="text-sm font-medium text-white/80">
+              <span className="w-2 h-2 rounded-full animate-pulse" style={{ backgroundColor: "#90b8e0" }} />
+              <span className="text-sm font-medium text-white/50 tracking-wide">
                 {audioMode === "mic" ? "Listening to microphone" : fileName}
               </span>
             </div>
@@ -1117,11 +1146,11 @@ export default function AudioVisualizer() {
           <div className="flex items-center gap-3">
             <button
               onClick={toggleMic}
-              className="px-6 py-3 rounded-full font-semibold text-sm transition-all duration-300 backdrop-blur-sm"
+              className="px-6 py-3 rounded-full font-medium text-sm transition-all duration-300 backdrop-blur-sm border border-white/10"
               style={
                 audioMode === "mic"
-                  ? { backgroundColor: theme.primary, color: "#fff", boxShadow: `0 0 24px ${theme.primary}60` }
-                  : { backgroundColor: "rgba(255,255,255,0.08)", color: "#fff" }
+                  ? { backgroundColor: "rgba(112,168,208,0.25)", color: "#c0d8e8", boxShadow: "0 0 20px rgba(112,168,208,0.15)" }
+                  : { backgroundColor: "rgba(255,255,255,0.04)", color: "rgba(255,255,255,0.5)" }
               }
             >
               {audioMode === "mic" ? "Mic On" : "Microphone"}
@@ -1129,11 +1158,11 @@ export default function AudioVisualizer() {
 
             <button
               onClick={() => fileInputRef.current?.click()}
-              className="px-6 py-3 rounded-full font-semibold text-sm transition-all duration-300 backdrop-blur-sm"
+              className="px-6 py-3 rounded-full font-medium text-sm transition-all duration-300 backdrop-blur-sm border border-white/10"
               style={
                 audioMode === "file"
-                  ? { backgroundColor: theme.accent, color: "#fff", boxShadow: `0 0 24px ${theme.accent}60` }
-                  : { backgroundColor: "rgba(255,255,255,0.08)", color: "#fff" }
+                  ? { backgroundColor: "rgba(212,160,80,0.25)", color: "#d4c8a0", boxShadow: "0 0 20px rgba(212,160,80,0.15)" }
+                  : { backgroundColor: "rgba(255,255,255,0.04)", color: "rgba(255,255,255,0.5)" }
               }
             >
               {audioMode === "file" ? "Playing" : "Upload MP3"}
@@ -1146,8 +1175,8 @@ export default function AudioVisualizer() {
                     audioRef.current.play().catch(() => {})
                   }
                 }}
-                className="px-6 py-3 rounded-full font-semibold text-sm transition-all duration-300 backdrop-blur-sm"
-                style={{ backgroundColor: theme.primary, color: "#fff", boxShadow: `0 0 24px ${theme.primary}60` }}
+                className="px-6 py-3 rounded-full font-medium text-sm transition-all duration-300 backdrop-blur-sm border border-white/10"
+                style={{ backgroundColor: "rgba(112,168,208,0.25)", color: "#c0d8e8", boxShadow: "0 0 20px rgba(112,168,208,0.15)" }}
               >
                 Play
               </button>
@@ -1156,8 +1185,8 @@ export default function AudioVisualizer() {
             {audioMode !== "off" && (
               <button
                 onClick={stopAudio}
-                className="px-6 py-3 rounded-full font-semibold text-sm transition-all duration-300 backdrop-blur-sm"
-                style={{ backgroundColor: "rgba(255,255,255,0.08)", color: "#fff" }}
+                className="px-6 py-3 rounded-full font-medium text-sm transition-all duration-300 backdrop-blur-sm border border-white/10"
+                style={{ backgroundColor: "rgba(255,255,255,0.04)", color: "rgba(255,255,255,0.5)" }}
               >
                 Stop
               </button>
