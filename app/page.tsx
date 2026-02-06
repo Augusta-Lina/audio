@@ -7,8 +7,8 @@ const AudioVisualizer = dynamic(
   {
     ssr: false,
     loading: () => (
-      <div className="w-full h-screen bg-[#010104] flex items-center justify-center">
-        <div className="text-white/30 text-sm tracking-widest font-light">Loading...</div>
+      <div className="w-full h-screen bg-[#0a0a0f] flex items-center justify-center">
+        <div className="text-white text-lg">Loading visualizer...</div>
       </div>
     ),
   }
