@@ -13,31 +13,6 @@ interface ColorTheme {
   particles: string
 }
 
-// Rainbow HSL conversion for smooth cycling
-function hslToHex(h: number, s: number, l: number): string {
-  h = ((h % 360) + 360) % 360
-  s /= 100
-  l /= 100
-  const a = s * Math.min(l, 1 - l)
-  const f = (n: number) => {
-    const k = (n + h / 30) % 12
-    const color = l - a * Math.max(Math.min(k - 3, 9 - k, 1), -1)
-    return Math.round(255 * color).toString(16).padStart(2, "0")
-  }
-  return `#${f(0)}${f(8)}${f(4)}`
-}
-
-function getRainbowTheme(time: number): ColorTheme {
-  const speed = 15 // degrees per second
-  const hue = (time * speed) % 360
-  return {
-    name: "Rainbow",
-    primary: hslToHex(hue, 100, 55),
-    accent: hslToHex(hue + 60, 100, 60),
-    particles: hslToHex(hue + 180, 90, 65),
-  }
-}
-
 const COLOR_THEMES: ColorTheme[] = [
   { name: "Neon", primary: "#ff1a5c", accent: "#c084fc", particles: "#3b82f6" },
   { name: "Ocean", primary: "#06b6d4", accent: "#0ea5e9", particles: "#22d3ee" },
@@ -304,10 +279,8 @@ class VoidShaderMaterial extends THREE.ShaderMaterial {
       uniforms: {
         uTime: { value: 0 },
         uBass: { value: 0 },
-        uMids: { value: 0 },
         uColor1: { value: new THREE.Color("#ff1a5c") },
         uColor2: { value: new THREE.Color("#c084fc") },
-        uColor3: { value: new THREE.Color("#3b82f6") },
       },
       vertexShader: `
         varying vec2 vUv;
@@ -319,70 +292,25 @@ class VoidShaderMaterial extends THREE.ShaderMaterial {
       fragmentShader: `
         uniform float uTime;
         uniform float uBass;
-        uniform float uMids;
         uniform vec3 uColor1;
         uniform vec3 uColor2;
-        uniform vec3 uColor3;
         varying vec2 vUv;
-
-        // HSL to RGB conversion
-        vec3 hsl2rgb(float h, float s, float l) {
-          float c = (1.0 - abs(2.0 * l - 1.0)) * s;
-          float x = c * (1.0 - abs(mod(h * 6.0, 2.0) - 1.0));
-          float m = l - c * 0.5;
-          vec3 rgb;
-          if (h < 1.0/6.0)      rgb = vec3(c, x, 0.0);
-          else if (h < 2.0/6.0) rgb = vec3(x, c, 0.0);
-          else if (h < 3.0/6.0) rgb = vec3(0.0, c, x);
-          else if (h < 4.0/6.0) rgb = vec3(0.0, x, c);
-          else if (h < 5.0/6.0) rgb = vec3(x, 0.0, c);
-          else                   rgb = vec3(c, 0.0, x);
-          return rgb + m;
-        }
-
+        
         void main() {
           vec2 uv = vUv - 0.5;
           float dist = length(uv);
           float angle = atan(uv.y, uv.x);
-
-          // Soft rainbow hue based on angle + time
-          float hue = fract(angle / 6.2832 + uTime * 0.04);
-
-          // Multiple soft glow layers
-          float glow1 = exp(-dist * 3.0) * (0.35 + uBass * 0.5);
-          float glow2 = exp(-dist * 5.0) * (0.2 + uMids * 0.3);
-          float glow3 = exp(-pow(dist - 0.2 - uBass * 0.05, 2.0) * 20.0) * 0.15;
-
-          // Soft ring that breathes with the bass
-          float ring = exp(-pow(dist - 0.25 - uBass * 0.08, 2.0) * 30.0) * 0.3;
-          ring += exp(-pow(dist - 0.38 - uMids * 0.05, 2.0) * 40.0) * 0.15;
-
-          // Spiral aurora effect
-          float spiral = sin(angle * 3.0 + dist * 8.0 - uTime * 1.5) * 0.5 + 0.5;
-          spiral *= smoothstep(0.55, 0.08, dist);
-          spiral *= 0.12 + uBass * 0.15;
-
-          // Combine all glows
-          float intensity = glow1 + glow2 + glow3 + ring + spiral;
-
-          // Rainbow color with shifting hue across the whole scene
-          float h1 = fract(hue + dist * 0.5);
-          float h2 = fract(hue + 0.33 + spiral);
-          float h3 = fract(hue + 0.66 - dist * 0.3);
-
-          vec3 c1 = hsl2rgb(h1, 0.9, 0.55);
-          vec3 c2 = hsl2rgb(h2, 0.85, 0.5);
-          vec3 c3 = hsl2rgb(h3, 0.95, 0.6);
-
-          vec3 color = c1 * glow1 + c2 * (glow2 + ring) + c3 * (glow3 + spiral);
-
-          // Soft vignette
-          color *= smoothstep(0.7, 0.0, dist * 0.8);
-
-          // Add subtle theme color tint
-          color += uColor1 * glow2 * 0.15;
-          color += uColor2 * ring * 0.1;
-
+          
+          float ring = sin(dist * 20.0 - uTime * 2.0) * 0.5 + 0.5;
+          ring *= smoothstep(0.5, 0.15, dist);
+          
+          float spiral = sin(angle * 6.0 + dist * 15.0 - uTime * 3.0) * 0.5 + 0.5;
+          spiral *= smoothstep(0.5, 0.1, dist);
+          
+          float pattern = ring * 0.5 + spiral * 0.5;
+          pattern *= uBass * 0.4 + 0.08;
+          
+          vec3 color = mix(uColor1, uColor2, spiral) * pattern;
           gl_FragColor = vec4(color, 1.0);
         }
       `,
@@ -408,10 +336,8 @@ function ShaderBackground({
     const time = state.clock.elapsedTime
     matRef.current.uniforms.uTime.value = time
     matRef.current.uniforms.uBass.value = getBass(analyzerData, time)
-    matRef.current.uniforms.uMids.value = getMids(analyzerData, time)
     matRef.current.uniforms.uColor1.value.set(theme.primary)
     matRef.current.uniforms.uColor2.value.set(theme.accent)
-    matRef.current.uniforms.uColor3.value.set(theme.particles)
   })
 
   return (
@@ -491,13 +417,13 @@ function DNAHelix({
       {Array.from({ length: nodeCount }).map((_, i) => (
         <mesh key={`s1-${i}`} ref={(el) => { if (el) strand1Ref.current[i] = el }}>
           <sphereGeometry args={[1, 8, 8]} />
-          <meshStandardMaterial color={theme.primary} emissive={theme.primary} emissiveIntensity={1.2} metalness={0.9} roughness={0.1} />
+          <meshStandardMaterial color={theme.primary} emissive={theme.primary} emissiveIntensity={0.8} metalness={0.9} roughness={0.1} />
         </mesh>
       ))}
       {Array.from({ length: nodeCount }).map((_, i) => (
         <mesh key={`s2-${i}`} ref={(el) => { if (el) strand2Ref.current[i] = el }}>
           <sphereGeometry args={[1, 8, 8]} />
-          <meshStandardMaterial color={theme.accent} emissive={theme.accent} emissiveIntensity={1.2} metalness={0.9} roughness={0.1} />
+          <meshStandardMaterial color={theme.accent} emissive={theme.accent} emissiveIntensity={0.8} metalness={0.9} roughness={0.1} />
         </mesh>
       ))}
       {Array.from({ length: connectorCount }).map((_, i) => (
@@ -578,13 +504,13 @@ function DNAHelixMirror({
       {Array.from({ length: nodeCount }).map((_, i) => (
         <mesh key={`s1m-${i}`} ref={(el) => { if (el) strand1Ref.current[i] = el }}>
           <sphereGeometry args={[1, 8, 8]} />
-          <meshStandardMaterial color={theme.accent} emissive={theme.accent} emissiveIntensity={1.2} metalness={0.9} roughness={0.1} />
+          <meshStandardMaterial color={theme.accent} emissive={theme.accent} emissiveIntensity={0.8} metalness={0.9} roughness={0.1} />
         </mesh>
       ))}
       {Array.from({ length: nodeCount }).map((_, i) => (
         <mesh key={`s2m-${i}`} ref={(el) => { if (el) strand2Ref.current[i] = el }}>
           <sphereGeometry args={[1, 8, 8]} />
-          <meshStandardMaterial color={theme.primary} emissive={theme.primary} emissiveIntensity={1.2} metalness={0.9} roughness={0.1} />
+          <meshStandardMaterial color={theme.primary} emissive={theme.primary} emissiveIntensity={0.8} metalness={0.9} roughness={0.1} />
         </mesh>
       ))}
       {Array.from({ length: connectorCount }).map((_, i) => (
@@ -607,22 +533,18 @@ function CentralOrb({
 }) {
   const meshRef = useRef<THREE.Mesh>(null)
   const glowRef = useRef<THREE.Mesh>(null)
-  const glow2Ref = useRef<THREE.Mesh>(null)
-  const glow3Ref = useRef<THREE.Mesh>(null)
   const wireRef = useRef<THREE.Mesh>(null)
   const wire2Ref = useRef<THREE.Mesh>(null)
 
   useFrame((state) => {
-    if (!meshRef.current || !glowRef.current || !glow2Ref.current || !glow3Ref.current || !wireRef.current || !wire2Ref.current) return
+    if (!meshRef.current || !glowRef.current || !wireRef.current || !wire2Ref.current) return
     const time = state.clock.elapsedTime
     const bass = getBass(analyzerData, time)
     const mids = getMids(analyzerData, time)
 
     const scale = 0.9 + bass * 0.7
     meshRef.current.scale.setScalar(scale)
-    glowRef.current.scale.setScalar(scale * 2.2 + Math.sin(time * 3) * 0.2)
-    glow2Ref.current.scale.setScalar(scale * 3.0 + Math.sin(time * 2.2) * 0.3)
-    glow3Ref.current.scale.setScalar(scale * 4.0 + Math.cos(time * 1.8) * 0.4)
+    glowRef.current.scale.setScalar(scale * 2 + Math.sin(time * 3) * 0.15)
     wireRef.current.scale.setScalar(scale * 1.3)
     wire2Ref.current.scale.setScalar(scale * 1.6)
 
@@ -659,18 +581,14 @@ function CentralOrb({
     pos.needsUpdate = true
 
     const glowMat = glowRef.current.material as THREE.MeshBasicMaterial
-    glowMat.opacity = 0.08 + bass * 0.12
-    const glow2Mat = glow2Ref.current.material as THREE.MeshBasicMaterial
-    glow2Mat.opacity = 0.04 + bass * 0.06
-    const glow3Mat = glow3Ref.current.material as THREE.MeshBasicMaterial
-    glow3Mat.opacity = 0.02 + bass * 0.04
+    glowMat.opacity = 0.06 + bass * 0.1
   })
 
   return (
     <group>
       <mesh ref={meshRef}>
         <icosahedronGeometry args={[0.8, 3]} />
-        <meshStandardMaterial color={theme.primary} metalness={0.95} roughness={0.02} emissive={theme.primary} emissiveIntensity={1.2} />
+        <meshStandardMaterial color={theme.primary} metalness={0.95} roughness={0.02} emissive={theme.primary} emissiveIntensity={0.8} />
       </mesh>
       <mesh ref={wireRef}>
         <icosahedronGeometry args={[0.8, 1]} />
@@ -680,18 +598,9 @@ function CentralOrb({
         <octahedronGeometry args={[0.8, 1]} />
         <meshBasicMaterial color={theme.particles} wireframe transparent opacity={0.15} />
       </mesh>
-      {/* Layered glow spheres for soft blur effect */}
       <mesh ref={glowRef}>
         <sphereGeometry args={[0.9, 16, 16]} />
         <meshBasicMaterial color={theme.primary} transparent opacity={0.1} blending={THREE.AdditiveBlending} />
-      </mesh>
-      <mesh ref={glow2Ref}>
-        <sphereGeometry args={[0.9, 16, 16]} />
-        <meshBasicMaterial color={theme.accent} transparent opacity={0.05} blending={THREE.AdditiveBlending} />
-      </mesh>
-      <mesh ref={glow3Ref}>
-        <sphereGeometry args={[0.9, 12, 12]} />
-        <meshBasicMaterial color={theme.particles} transparent opacity={0.03} blending={THREE.AdditiveBlending} />
       </mesh>
     </group>
   )
@@ -879,7 +788,7 @@ function SpiralRibbons({
         return (
           <mesh key={i} ref={(el) => { if (el) meshesRef.current[i] = el }}>
             <octahedronGeometry args={[0.4, 0]} />
-            <meshStandardMaterial color={color} emissive={color} emissiveIntensity={1.0} metalness={0.95} roughness={0.05} transparent opacity={0.9} />
+            <meshStandardMaterial color={color} emissive={color} emissiveIntensity={0.5} metalness={0.95} roughness={0.05} transparent opacity={0.9} />
           </mesh>
         )
       })}
@@ -1053,20 +962,13 @@ function GroundGrid({
 function Scene({
   analyzerData,
   mousePos,
-  useRainbow,
-  staticTheme,
+  theme,
 }: {
   analyzerData: AudioAnalyzerData | null
   mousePos: { x: number; y: number }
-  useRainbow: boolean
-  staticTheme: ColorTheme
+  theme: ColorTheme
 }) {
   const { camera } = useThree()
-  const themeRef = useRef<ColorTheme>(staticTheme)
-  const light1Ref = useRef<THREE.PointLight>(null)
-  const light2Ref = useRef<THREE.PointLight>(null)
-  const light3Ref = useRef<THREE.PointLight>(null)
-  const light4Ref = useRef<THREE.PointLight>(null)
 
   useFrame((state) => {
     const time = state.clock.elapsedTime
@@ -1080,61 +982,19 @@ function Scene({
     camera.position.y = THREE.MathUtils.lerp(camera.position.y, targetY, 0.025)
     camera.position.z = THREE.MathUtils.lerp(camera.position.z, targetZ, 0.015)
     camera.lookAt(0, breathe * 0.3, 0)
-
-    // Update the theme ref with rainbow or static
-    if (useRainbow) {
-      themeRef.current = getRainbowTheme(time)
-    } else {
-      themeRef.current = staticTheme
-    }
-
-    // Update lights dynamically
-    const t = themeRef.current
-    if (light1Ref.current) light1Ref.current.color.set(t.primary)
-    if (light2Ref.current) light2Ref.current.color.set(t.accent)
-    if (light3Ref.current) light3Ref.current.color.set(t.particles)
-    if (light4Ref.current) light4Ref.current.color.set(t.primary)
   })
 
   return (
     <>
-      <color attach="background" args={["#020208"]} />
-      <fog attach="fog" args={["#020208", 14, 38]} />
+      <color attach="background" args={["#030306"]} />
+      <fog attach="fog" args={["#030306", 12, 35]} />
 
-      <ambientLight intensity={0.08} />
-      <pointLight ref={light1Ref} position={[0, 8, 0]} intensity={2.5} color={staticTheme.primary} distance={28} />
-      <pointLight ref={light2Ref} position={[8, 3, 8]} intensity={1.5} color={staticTheme.accent} distance={22} />
-      <pointLight ref={light3Ref} position={[-8, 3, -8]} intensity={1.5} color={staticTheme.particles} distance={22} />
-      <pointLight ref={light4Ref} position={[0, -4, 0]} intensity={0.8} color={staticTheme.primary} distance={18} />
+      <ambientLight intensity={0.1} />
+      <pointLight position={[0, 8, 0]} intensity={2} color={theme.primary} distance={25} />
+      <pointLight position={[8, 3, 8]} intensity={1} color={theme.accent} distance={20} />
+      <pointLight position={[-8, 3, -8]} intensity={1} color={theme.particles} distance={20} />
+      <pointLight position={[0, -4, 0]} intensity={0.6} color={theme.primary} distance={15} />
 
-      <SceneInner analyzerData={analyzerData} mousePos={mousePos} themeRef={themeRef} />
-    </>
-  )
-}
-
-// Inner scene reads theme from ref and updates at a throttled rate
-function SceneInner({
-  analyzerData,
-  mousePos,
-  themeRef,
-}: {
-  analyzerData: AudioAnalyzerData | null
-  mousePos: { x: number; y: number }
-  themeRef: React.RefObject<ColorTheme | null>
-}) {
-  const [theme, setTheme] = useState<ColorTheme>(themeRef.current!)
-  const frameCount = useRef(0)
-  
-  useFrame(() => {
-    frameCount.current++
-    // Update theme state every 3 frames (~20fps) to balance smooth color transitions with performance
-    if (frameCount.current % 3 === 0 && themeRef.current) {
-      setTheme(themeRef.current)
-    }
-  })
-
-  return (
-    <>
       <ShaderBackground analyzerData={analyzerData} theme={theme} />
       <CentralOrb analyzerData={analyzerData} theme={theme} />
       <SpiralRibbons analyzerData={analyzerData} theme={theme} />
@@ -1152,8 +1012,7 @@ function SceneInner({
 export default function AudioVisualizer() {
   const [fileName, setFileName] = useState<string | null>(null)
   const [mousePos, setMousePos] = useState({ x: 0, y: 0 })
-  const [useRainbow, setUseRainbow] = useState(true)
-  const [staticTheme, setStaticTheme] = useState<ColorTheme>(COLOR_THEMES[0])
+  const [theme, setTheme] = useState<ColorTheme>(COLOR_THEMES[0])
   const fileInputRef = useRef<HTMLInputElement>(null)
   const audioRef = useRef<HTMLAudioElement>(null)
   const { analyzerData, error, loadFile, startMic, stop, audioMode } = useAudioAnalyzer(audioRef)
@@ -1202,63 +1061,40 @@ export default function AudioVisualizer() {
     return () => window.removeEventListener("mousemove", handleMouseMove)
   }, [])
 
-  // Display theme for UI buttons (static theme for colors)
-  const displayTheme = staticTheme
-
   return (
-    <div className="w-full h-screen relative overflow-hidden bg-[#020208]">
+    <div className="w-full h-screen relative overflow-hidden bg-[#030306]">
       <Canvas
         camera={{ position: [0, 4, 10], fov: 60 }}
         gl={{ antialias: false, powerPreference: "default", alpha: false }}
         dpr={[1, 1.5]}
       >
-        <Scene analyzerData={analyzerData} mousePos={mousePos} useRainbow={useRainbow} staticTheme={staticTheme} />
+        <Scene analyzerData={analyzerData} mousePos={mousePos} theme={theme} />
       </Canvas>
 
-      {/* Hidden but DOM-rendered audio element */}
+      {/* Hidden but DOM-rendered audio element — browser trusts native controls in iframes */}
       <audio ref={audioRef} className="hidden" crossOrigin="anonymous" loop />
 
       {/* Error message */}
       {error && showErrorTimeout && (
-        <div className="absolute top-4 left-1/2 -translate-x-1/2 bg-red-500/90 backdrop-blur-md text-white px-6 py-3 rounded-lg text-sm pointer-events-auto z-50 animate-pulse">
+        <div className="absolute top-4 left-1/2 -translate-x-1/2 bg-red-500/90 backdrop-blur-sm text-white px-6 py-3 rounded-lg text-sm pointer-events-auto z-50 animate-pulse">
           {error}
         </div>
       )}
 
       <div className="absolute inset-0 pointer-events-none">
-        {/* Theme picker */}
-        <div className="absolute top-8 right-8 flex gap-2 pointer-events-auto items-center">
-          {/* Rainbow toggle */}
-          <button
-            onClick={() => setUseRainbow(true)}
-            className={`w-8 h-8 rounded-full transition-all overflow-hidden ${
-              useRainbow
-                ? "border-2 border-white scale-110 shadow-lg"
-                : "border-2 border-white/20 hover:scale-105 hover:border-white/50"
-            }`}
-            style={{
-              background: "conic-gradient(#ff0040, #ff8000, #ffcc00, #00e060, #00c0ff, #4060ff, #a020f0, #ff40c0, #ff0040)",
-              boxShadow: useRainbow ? "0 0 20px rgba(255,255,255,0.3)" : "none",
-            }}
-            title="Rainbow"
-            aria-label="Switch to rainbow mode"
-          />
-          <div className="w-px h-6 bg-white/20 mx-1" />
+        <div className="absolute top-8 right-8 flex gap-2 pointer-events-auto">
           {COLOR_THEMES.map((t) => (
             <button
               key={t.name}
-              onClick={() => {
-                setStaticTheme(t)
-                setUseRainbow(false)
-              }}
+              onClick={() => setTheme(t)}
               className={`w-8 h-8 rounded-full transition-all ${
-                !useRainbow && staticTheme.name === t.name
+                theme.name === t.name
                   ? "border-2 border-white scale-110 shadow-lg"
                   : "border-2 border-white/20 hover:scale-105 hover:border-white/50"
               }`}
               style={{
                 backgroundColor: t.primary,
-                boxShadow: !useRainbow && staticTheme.name === t.name ? `0 0 16px ${t.primary}80` : "none",
+                boxShadow: theme.name === t.name ? `0 0 16px ${t.primary}80` : "none",
               }}
               title={t.name}
               aria-label={`Switch to ${t.name} theme`}
@@ -1270,14 +1106,7 @@ export default function AudioVisualizer() {
           {/* Status indicator */}
           {audioMode !== "off" && (
             <div className="flex items-center gap-2 mb-1">
-              <span
-                className="w-2.5 h-2.5 rounded-full animate-pulse"
-                style={{
-                  background: useRainbow
-                    ? "conic-gradient(#ff0040, #ff8000, #ffcc00, #00e060, #00c0ff, #4060ff, #a020f0, #ff40c0, #ff0040)"
-                    : displayTheme.primary,
-                }}
-              />
+              <span className="w-2.5 h-2.5 rounded-full animate-pulse" style={{ backgroundColor: theme.primary }} />
               <span className="text-sm font-medium text-white/80">
                 {audioMode === "mic" ? "Listening to microphone" : fileName}
               </span>
@@ -1288,19 +1117,11 @@ export default function AudioVisualizer() {
           <div className="flex items-center gap-3">
             <button
               onClick={toggleMic}
-              className="px-6 py-3 rounded-full font-semibold text-sm transition-all duration-300 backdrop-blur-md border border-white/10"
+              className="px-6 py-3 rounded-full font-semibold text-sm transition-all duration-300 backdrop-blur-sm"
               style={
                 audioMode === "mic"
-                  ? {
-                      background: useRainbow
-                        ? "linear-gradient(135deg, #ff0040, #ff8000, #ffcc00, #00e060)"
-                        : displayTheme.primary,
-                      color: "#fff",
-                      boxShadow: useRainbow
-                        ? "0 0 30px rgba(255,100,50,0.4)"
-                        : `0 0 24px ${displayTheme.primary}60`,
-                    }
-                  : { backgroundColor: "rgba(255,255,255,0.06)", color: "#fff" }
+                  ? { backgroundColor: theme.primary, color: "#fff", boxShadow: `0 0 24px ${theme.primary}60` }
+                  : { backgroundColor: "rgba(255,255,255,0.08)", color: "#fff" }
               }
             >
               {audioMode === "mic" ? "Mic On" : "Microphone"}
@@ -1308,19 +1129,11 @@ export default function AudioVisualizer() {
 
             <button
               onClick={() => fileInputRef.current?.click()}
-              className="px-6 py-3 rounded-full font-semibold text-sm transition-all duration-300 backdrop-blur-md border border-white/10"
+              className="px-6 py-3 rounded-full font-semibold text-sm transition-all duration-300 backdrop-blur-sm"
               style={
                 audioMode === "file"
-                  ? {
-                      background: useRainbow
-                        ? "linear-gradient(135deg, #00c0ff, #4060ff, #a020f0, #ff40c0)"
-                        : displayTheme.accent,
-                      color: "#fff",
-                      boxShadow: useRainbow
-                        ? "0 0 30px rgba(100,100,255,0.4)"
-                        : `0 0 24px ${displayTheme.accent}60`,
-                    }
-                  : { backgroundColor: "rgba(255,255,255,0.06)", color: "#fff" }
+                  ? { backgroundColor: theme.accent, color: "#fff", boxShadow: `0 0 24px ${theme.accent}60` }
+                  : { backgroundColor: "rgba(255,255,255,0.08)", color: "#fff" }
               }
             >
               {audioMode === "file" ? "Playing" : "Upload MP3"}
@@ -1333,16 +1146,8 @@ export default function AudioVisualizer() {
                     audioRef.current.play().catch(() => {})
                   }
                 }}
-                className="px-6 py-3 rounded-full font-semibold text-sm transition-all duration-300 backdrop-blur-md border border-white/10"
-                style={{
-                  background: useRainbow
-                    ? "linear-gradient(135deg, #ff0040, #ffcc00, #00e060, #00c0ff)"
-                    : displayTheme.primary,
-                  color: "#fff",
-                  boxShadow: useRainbow
-                    ? "0 0 30px rgba(255,200,50,0.4)"
-                    : `0 0 24px ${displayTheme.primary}60`,
-                }}
+                className="px-6 py-3 rounded-full font-semibold text-sm transition-all duration-300 backdrop-blur-sm"
+                style={{ backgroundColor: theme.primary, color: "#fff", boxShadow: `0 0 24px ${theme.primary}60` }}
               >
                 Play
               </button>
@@ -1351,8 +1156,8 @@ export default function AudioVisualizer() {
             {audioMode !== "off" && (
               <button
                 onClick={stopAudio}
-                className="px-6 py-3 rounded-full font-semibold text-sm transition-all duration-300 backdrop-blur-md border border-white/10"
-                style={{ backgroundColor: "rgba(255,255,255,0.06)", color: "#fff" }}
+                className="px-6 py-3 rounded-full font-semibold text-sm transition-all duration-300 backdrop-blur-sm"
+                style={{ backgroundColor: "rgba(255,255,255,0.08)", color: "#fff" }}
               >
                 Stop
               </button>
