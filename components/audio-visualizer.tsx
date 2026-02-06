@@ -13,12 +13,12 @@ interface ColorTheme {
   particles: string
 }
 
-// Prismatic / chromatic aberration palette inspired by light refraction
+// Effervescent gold and purple palette
 const PRISMATIC_THEME: ColorTheme = {
   name: "Prismatic",
-  primary: "#70a8d0",   // cool blue-white
-  accent: "#d4a050",    // warm amber/gold
-  particles: "#c03040", // deep crimson
+  primary: "#d4a040",   // shimmery gold
+  accent: "#8040c0",    // rich purple
+  particles: "#c090ff", // soft lavender shimmer
 }
 
 
@@ -281,9 +281,9 @@ class VoidShaderMaterial extends THREE.ShaderMaterial {
         uTime: { value: 0 },
         uBass: { value: 0 },
         uMids: { value: 0 },
-        uColor1: { value: new THREE.Color("#70a8d0") },
-        uColor2: { value: new THREE.Color("#d4a050") },
-        uColor3: { value: new THREE.Color("#c03040") },
+        uColor1: { value: new THREE.Color("#d4a040") },
+        uColor2: { value: new THREE.Color("#8040c0") },
+        uColor3: { value: new THREE.Color("#c090ff") },
       },
       vertexShader: `
         varying vec2 vUv;
@@ -325,16 +325,16 @@ class VoidShaderMaterial extends THREE.ShaderMaterial {
           spiral *= smoothstep(0.45, 0.05, dist) * 0.06;
           spiral *= (0.3 + uMids * 0.6);
 
-          // Combine - each channel slightly offset for chromatic look
-          float r = glowR * 0.04 + ring * 0.8 + spiral * 0.6;
-          float g = glowG * 0.05 + ring * 0.5 + spiral * 0.4;
-          float b = glowB * 0.08 + ring * 0.9 + spiral * 0.8;
+          // Combine - gold/purple chromatic look
+          float r = glowR * 0.06 + ring * 0.7 + spiral * 0.5;
+          float g = glowG * 0.035 + ring * 0.35 + spiral * 0.25;
+          float b = glowB * 0.07 + ring * 0.6 + spiral * 0.7;
 
-          // Tint with theme colors
+          // Tint with theme colors (gold + purple + lavender)
           vec3 color = vec3(r, g, b) * (uBass * 0.5 + 0.15);
-          color += uColor1 * glowG * 0.03;
-          color += uColor2 * ring * 0.04;
-          color += uColor3 * spiral * 0.02;
+          color += uColor1 * glowG * 0.04;
+          color += uColor2 * ring * 0.05;
+          color += uColor3 * spiral * 0.03;
 
           // Strong vignette to deep black edges
           color *= smoothstep(0.55, 0.0, dist * 0.7);
@@ -459,7 +459,7 @@ function DNAHelix({
       {Array.from({ length: connectorCount }).map((_, i) => (
         <mesh key={`c-${i}`} ref={(el) => { if (el) connectorsRef.current[i] = el }}>
           <boxGeometry args={[1, 1, 1]} />
-          <meshBasicMaterial color="#80a8c8" transparent opacity={0.2} blending={THREE.AdditiveBlending} />
+          <meshBasicMaterial color="#b880e0" transparent opacity={0.2} blending={THREE.AdditiveBlending} />
         </mesh>
       ))}
     </group>
@@ -546,7 +546,7 @@ function DNAHelixMirror({
       {Array.from({ length: connectorCount }).map((_, i) => (
         <mesh key={`cm-${i}`} ref={(el) => { if (el) connectorsRef.current[i] = el }}>
           <boxGeometry args={[1, 1, 1]} />
-          <meshBasicMaterial color="#80a8c8" transparent opacity={0.2} blending={THREE.AdditiveBlending} />
+          <meshBasicMaterial color="#b880e0" transparent opacity={0.2} blending={THREE.AdditiveBlending} />
         </mesh>
       ))}
     </group>
@@ -626,7 +626,7 @@ function CentralOrb({
     <group>
       <mesh ref={meshRef}>
         <icosahedronGeometry args={[0.8, 3]} />
-        <meshStandardMaterial color="#c0d8e8" metalness={0.98} roughness={0.01} emissive="#a0c4e0" emissiveIntensity={0.6} />
+        <meshStandardMaterial color="#e8d0a0" metalness={0.98} roughness={0.01} emissive="#d4a040" emissiveIntensity={0.6} />
       </mesh>
       <mesh ref={wireRef}>
         <icosahedronGeometry args={[0.8, 1]} />
@@ -639,7 +639,7 @@ function CentralOrb({
       {/* Layered glow for soft prismatic diffusion */}
       <mesh ref={glowRef}>
         <sphereGeometry args={[0.9, 16, 16]} />
-        <meshBasicMaterial color="#c0d8ff" transparent opacity={0.08} blending={THREE.AdditiveBlending} />
+        <meshBasicMaterial color="#e8c870" transparent opacity={0.08} blending={THREE.AdditiveBlending} />
       </mesh>
       <mesh ref={glow2Ref}>
         <sphereGeometry args={[0.9, 16, 16]} />
@@ -653,88 +653,97 @@ function CentralOrb({
   )
 }
 
-// ========== Outer symmetrical frequency bars ==========
+// ========== Symmetric frequency dot cloud ==========
 function SymmetricBars({
   analyzerData,
   mousePos,
-  theme,
 }: {
   analyzerData: AudioAnalyzerData | null
   mousePos: { x: number; y: number }
   theme: ColorTheme
 }) {
-  const groupRef = useRef<THREE.Group>(null)
-  const meshesRef = useRef<THREE.Mesh[]>([])
-  const materialsRef = useRef<THREE.MeshStandardMaterial[]>([])
-  const count = 32
+  const pointsRef = useRef<THREE.Points>(null)
+  const freqBands = 32
+  const dotsPerBand = 14
+  const totalDots = freqBands * 2 * dotsPerBand
 
-  const barData = useMemo(() => {
-    const data: { angle: number }[] = []
+  const { positions, colors, baseData } = useMemo(() => {
+    const pos = new Float32Array(totalDots * 3)
+    const col = new Float32Array(totalDots * 3)
+    const data: { angle: number; bandIdx: number; dotIdx: number }[] = []
+
+    const goldColor = new THREE.Color("#d4a040")
+    const purpleColor = new THREE.Color("#8040c0")
+    const lavenderColor = new THREE.Color("#c090ff")
+
+    let idx = 0
     for (let side = 0; side < 2; side++) {
-      for (let i = 0; i < count; i++) {
-        const angle = (i / count) * Math.PI + (side === 1 ? Math.PI : 0)
-        data.push({ angle })
+      for (let band = 0; band < freqBands; band++) {
+        const angle = (band / freqBands) * Math.PI + (side === 1 ? Math.PI : 0)
+        for (let d = 0; d < dotsPerBand; d++) {
+          data.push({ angle, bandIdx: band, dotIdx: d })
+          pos[idx * 3] = 0
+          pos[idx * 3 + 1] = 0
+          pos[idx * 3 + 2] = 0
+
+          const t = band / freqBands
+          const c = new THREE.Color()
+          if (t < 0.5) {
+            c.lerpColors(goldColor, purpleColor, t * 2)
+          } else {
+            c.lerpColors(purpleColor, lavenderColor, (t - 0.5) * 2)
+          }
+          col[idx * 3] = c.r
+          col[idx * 3 + 1] = c.g
+          col[idx * 3 + 2] = c.b
+          idx++
+        }
       }
     }
-    return data
-  }, [])
+    return { positions: pos, colors: col, baseData: data }
+  }, [totalDots])
 
   useFrame((state) => {
+    if (!pointsRef.current) return
     const time = state.clock.elapsedTime
-    const frequencies = getFrequencies(analyzerData, count, time)
+    const frequencies = getFrequencies(analyzerData, freqBands, time)
     const radius = 4.5 + mousePos.y * 0.5
+    const posAttr = pointsRef.current.geometry.attributes.position
+    const arr = posAttr.array as Float32Array
 
-    meshesRef.current.forEach((mesh, idx) => {
-      if (!mesh) return
-      const { angle } = barData[idx]
-      const freqIdx = idx % count
-      const freq = frequencies[freqIdx]
-      const height = 0.2 + freq * 5
-
+    for (let i = 0; i < totalDots; i++) {
+      const { angle, bandIdx, dotIdx } = baseData[i]
+      const freq = frequencies[bandIdx]
+      const height = freq * 5
       const adjustedAngle = angle + mousePos.x * 0.3
-      const x = Math.cos(adjustedAngle) * radius
-      const z = Math.sin(adjustedAngle) * radius
+      const yPos = (dotIdx / dotsPerBand) * height + Math.sin(time * 2 + dotIdx * 0.8 + bandIdx) * 0.15
+      const scatter = Math.sin(dotIdx * 2.1 + bandIdx * 0.7) * 0.12 + Math.cos(time * 1.5 + dotIdx) * 0.05
+      const r = radius + scatter
 
-      mesh.position.set(x, height / 2, z)
-      mesh.scale.set(0.15 + freq * 0.08, height, 0.15 + freq * 0.08)
-      mesh.lookAt(0, mesh.position.y, 0)
-
-      const mat = materialsRef.current[idx]
-      if (mat) {
-        mat.emissiveIntensity = 0.2 + freq * 0.8
-      }
-    })
-
-    if (groupRef.current) {
-      groupRef.current.rotation.y = time * 0.08 + mousePos.x * 0.5
+      arr[i * 3] = Math.cos(adjustedAngle) * r
+      arr[i * 3 + 1] = yPos
+      arr[i * 3 + 2] = Math.sin(adjustedAngle) * r
     }
+    posAttr.needsUpdate = true
+    pointsRef.current.rotation.y = time * 0.08 + mousePos.x * 0.5
   })
 
-  const primaryColor = useMemo(() => new THREE.Color(theme.primary), [theme.primary])
-  const accentColor = useMemo(() => new THREE.Color(theme.accent), [theme.accent])
-
   return (
-    <group ref={groupRef}>
-      {barData.map((_, idx) => {
-        const t = (idx % count) / count
-        const color = new THREE.Color().lerpColors(primaryColor, accentColor, t)
-        return (
-          <mesh key={idx} ref={(el) => { if (el) meshesRef.current[idx] = el }}>
-            <boxGeometry args={[1, 1, 1]} />
-            <meshStandardMaterial
-              ref={(el) => { if (el) materialsRef.current[idx] = el }}
-              color={color}
-              metalness={0.95}
-              roughness={0.05}
-              emissive={color}
-              emissiveIntensity={0.2}
-              transparent
-              opacity={0.85}
-            />
-          </mesh>
-        )
-      })}
-    </group>
+    <points ref={pointsRef}>
+      <bufferGeometry>
+        <bufferAttribute attach="attributes-position" count={totalDots} array={positions} itemSize={3} />
+        <bufferAttribute attach="attributes-color" count={totalDots} array={colors} itemSize={3} />
+      </bufferGeometry>
+      <pointsMaterial
+        size={0.035}
+        vertexColors
+        transparent
+        opacity={0.9}
+        sizeAttenuation
+        blending={THREE.AdditiveBlending}
+        depthWrite={false}
+      />
+    </points>
   )
 }
 
@@ -776,7 +785,7 @@ function OrbitingRings({
         <mesh key={i} ref={(el) => { if (el) ringsRef.current[i] = el }}>
           <torusGeometry args={[1, 0.01 + i * 0.003, 8, 64]} />
           <meshBasicMaterial
-            color={i % 3 === 0 ? "#90b8e0" : i % 3 === 1 ? theme.accent : theme.particles}
+            color={i % 3 === 0 ? "#d4a040" : i % 3 === 1 ? "#8040c0" : "#c090ff"}
             transparent
             opacity={0.12}
             blending={THREE.AdditiveBlending}
@@ -891,7 +900,7 @@ function EnergyBeams({
         <mesh key={i} ref={(el) => { if (el) beamsRef.current[i] = el }}>
           <boxGeometry args={[1, 1, 1]} />
           <meshBasicMaterial
-            color={i % 3 === 0 ? "#90b8d8" : i % 3 === 1 ? "#d4a050" : "#c03040"}
+            color={i % 3 === 0 ? "#d4a040" : i % 3 === 1 ? "#8040c0" : "#c090ff"}
             transparent
             opacity={0.06}
             blending={THREE.AdditiveBlending}
@@ -1039,10 +1048,10 @@ function Scene({
       <fog attach="fog" args={["#010104", 14, 38]} />
 
       <ambientLight intensity={0.04} />
-      <pointLight position={[0, 8, 0]} intensity={1.5} color="#90b8e0" distance={25} />
-      <pointLight position={[8, 3, 8]} intensity={0.8} color={theme.accent} distance={20} />
-      <pointLight position={[-8, 3, -8]} intensity={0.6} color={theme.particles} distance={20} />
-      <pointLight position={[0, -4, 0]} intensity={0.3} color="#a0c0d8" distance={15} />
+      <pointLight position={[0, 8, 0]} intensity={1.5} color="#d4a040" distance={25} />
+      <pointLight position={[8, 3, 8]} intensity={0.8} color="#8040c0" distance={20} />
+      <pointLight position={[-8, 3, -8]} intensity={0.6} color="#c090ff" distance={20} />
+      <pointLight position={[0, -4, 0]} intensity={0.3} color="#e0c070" distance={15} />
 
       <ShaderBackground analyzerData={analyzerData} theme={theme} />
       <CentralOrb analyzerData={analyzerData} theme={theme} />
@@ -1135,7 +1144,7 @@ export default function AudioVisualizer() {
           {/* Status indicator */}
           {audioMode !== "off" && (
             <div className="flex items-center gap-2 mb-1">
-              <span className="w-2 h-2 rounded-full animate-pulse" style={{ backgroundColor: "#90b8e0" }} />
+              <span className="w-2 h-2 rounded-full animate-pulse" style={{ backgroundColor: "#d4a040" }} />
               <span className="text-sm font-medium text-white/50 tracking-wide">
                 {audioMode === "mic" ? "Listening to microphone" : fileName}
               </span>
@@ -1149,7 +1158,7 @@ export default function AudioVisualizer() {
               className="px-6 py-3 rounded-full font-medium text-sm transition-all duration-300 backdrop-blur-sm border border-white/10"
               style={
                 audioMode === "mic"
-                  ? { backgroundColor: "rgba(112,168,208,0.25)", color: "#c0d8e8", boxShadow: "0 0 20px rgba(112,168,208,0.15)" }
+                  ? { backgroundColor: "rgba(212,160,64,0.25)", color: "#e8d0a0", boxShadow: "0 0 20px rgba(212,160,64,0.15)" }
                   : { backgroundColor: "rgba(255,255,255,0.04)", color: "rgba(255,255,255,0.5)" }
               }
             >
@@ -1161,7 +1170,7 @@ export default function AudioVisualizer() {
               className="px-6 py-3 rounded-full font-medium text-sm transition-all duration-300 backdrop-blur-sm border border-white/10"
               style={
                 audioMode === "file"
-                  ? { backgroundColor: "rgba(212,160,80,0.25)", color: "#d4c8a0", boxShadow: "0 0 20px rgba(212,160,80,0.15)" }
+                  ? { backgroundColor: "rgba(128,64,192,0.25)", color: "#c0a0e0", boxShadow: "0 0 20px rgba(128,64,192,0.15)" }
                   : { backgroundColor: "rgba(255,255,255,0.04)", color: "rgba(255,255,255,0.5)" }
               }
             >
@@ -1176,7 +1185,7 @@ export default function AudioVisualizer() {
                   }
                 }}
                 className="px-6 py-3 rounded-full font-medium text-sm transition-all duration-300 backdrop-blur-sm border border-white/10"
-                style={{ backgroundColor: "rgba(112,168,208,0.25)", color: "#c0d8e8", boxShadow: "0 0 20px rgba(112,168,208,0.15)" }}
+                style={{ backgroundColor: "rgba(212,160,64,0.25)", color: "#e8d0a0", boxShadow: "0 0 20px rgba(212,160,64,0.15)" }}
               >
                 Play
               </button>
