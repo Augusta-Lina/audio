@@ -223,6 +223,79 @@ function getHighs(analyzerData: AudioAnalyzerData | null, time: number): number 
   return 0.3 + Math.cos(time * 4.2) * 0.15
 }
 
+// ========== Gradient bar shader material ==========
+class GradientBarShaderMaterial extends THREE.ShaderMaterial {
+  constructor() {
+    super({
+      uniforms: {
+        uColorBase: { value: new THREE.Color("#9e9fef") },
+        uColorMid: { value: new THREE.Color("#c471ec") },
+        uColorTop: { value: new THREE.Color("#f472b6") },
+        uEmissiveIntensity: { value: 0.5 },
+        uTime: { value: 0 },
+        uFreqOffset: { value: 0 },
+      },
+      vertexShader: `
+        varying vec2 vUv;
+        varying vec3 vWorldPos;
+        void main() {
+          vUv = uv;
+          vec4 worldPos = modelMatrix * vec4(position, 1.0);
+          vWorldPos = worldPos.xyz;
+          gl_Position = projectionMatrix * viewMatrix * worldPos;
+        }
+      `,
+      fragmentShader: `
+        uniform vec3 uColorBase;
+        uniform vec3 uColorMid;
+        uniform vec3 uColorTop;
+        uniform float uEmissiveIntensity;
+        uniform float uTime;
+        uniform float uFreqOffset;
+        varying vec2 vUv;
+        varying vec3 vWorldPos;
+
+        void main() {
+          // Smooth vertical gradient using smoothstep for glassy blending
+          float t = vUv.y;
+          
+          // Three-stop gradient: base -> mid -> top with smooth easing
+          vec3 color;
+          if (t < 0.5) {
+            float blend = smoothstep(0.0, 0.5, t);
+            color = mix(uColorBase, uColorMid, blend);
+          } else {
+            float blend = smoothstep(0.5, 1.0, t);
+            color = mix(uColorMid, uColorTop, blend);
+          }
+          
+          // Subtle iridescent shimmer based on view angle and time
+          float shimmer = sin(vWorldPos.y * 8.0 + uTime * 1.5 + uFreqOffset * 6.28) * 0.08 + 0.92;
+          color *= shimmer;
+          
+          // Edge glow for frosted glass effect
+          float edgeFade = smoothstep(0.0, 0.15, vUv.x) * smoothstep(1.0, 0.85, vUv.x);
+          float edgeGlow = 1.0 + (1.0 - edgeFade) * 0.3;
+          color *= edgeGlow;
+          
+          // Emissive boost
+          vec3 emissive = color * uEmissiveIntensity;
+          
+          // Slight transparency at base for frosted look
+          float alpha = 0.75 + 0.25 * smoothstep(0.0, 0.3, t);
+          
+          gl_FragColor = vec4(color + emissive, alpha);
+        }
+      `,
+      transparent: true,
+      blending: THREE.NormalBlending,
+      side: THREE.DoubleSide,
+    })
+  }
+}
+
+extend({ GradientBarShaderMaterial })
+
 // ========== Shader background ==========
 class VoidShaderMaterial extends THREE.ShaderMaterial {
   constructor() {
@@ -557,7 +630,7 @@ function CentralOrb({
   )
 }
 
-// ========== Outer symmetrical frequency bars ==========
+// ========== Outer symmetrical frequency bars (gradient + glow) ==========
 function SymmetricBars({
   analyzerData,
   mousePos,
@@ -569,7 +642,9 @@ function SymmetricBars({
 }) {
   const groupRef = useRef<THREE.Group>(null)
   const meshesRef = useRef<THREE.Mesh[]>([])
-  const materialsRef = useRef<THREE.MeshStandardMaterial[]>([])
+  const glowMeshesRef = useRef<THREE.Mesh[]>([])
+  const shaderMatsRef = useRef<GradientBarShaderMaterial[]>([])
+  const glowMatsRef = useRef<THREE.MeshBasicMaterial[]>([])
   const count = 32
 
   const barData = useMemo(() => {
@@ -582,6 +657,28 @@ function SymmetricBars({
     }
     return data
   }, [])
+
+  // Precompute gradient colors for each bar based on spectral position
+  const barColors = useMemo(() => {
+    // Lavender base, orchid mid, pink top - shifting smoothly per bar for spectral blending
+    const baseA = new THREE.Color("#9e9fef")
+    const baseB = new THREE.Color("#7c8cf0")
+    const midA = new THREE.Color("#c471ec")
+    const midB = new THREE.Color("#a855f7")
+    const topA = new THREE.Color("#f472b6")
+    const topB = new THREE.Color("#fb7185")
+
+    return barData.map((_, idx) => {
+      const t = (idx % count) / count
+      // Smooth spectral shift across bars
+      const spectralT = (Math.sin(t * Math.PI * 2) * 0.5 + 0.5)
+      return {
+        base: new THREE.Color().lerpColors(baseA, baseB, spectralT),
+        mid: new THREE.Color().lerpColors(midA, midB, spectralT),
+        top: new THREE.Color().lerpColors(topA, topB, spectralT),
+      }
+    })
+  }, [barData])
 
   useFrame((state) => {
     const time = state.clock.elapsedTime
@@ -603,9 +700,40 @@ function SymmetricBars({
       mesh.scale.set(0.15 + freq * 0.08, height, 0.15 + freq * 0.08)
       mesh.lookAt(0, mesh.position.y, 0)
 
-      const mat = materialsRef.current[idx]
+      // Update shader uniforms
+      const mat = shaderMatsRef.current[idx]
       if (mat) {
-        mat.emissiveIntensity = 0.3 + freq * 1.2
+        mat.uniforms.uEmissiveIntensity.value = 0.3 + freq * 1.2
+        mat.uniforms.uTime.value = time
+        mat.uniforms.uFreqOffset.value = (idx % count) / count
+
+        // Blend theme colors into the gradient stops
+        const colors = barColors[idx]
+        const themeBase = new THREE.Color(theme.primary)
+        const themeAccent = new THREE.Color(theme.accent)
+        mat.uniforms.uColorBase.value.copy(colors.base).lerp(themeBase, 0.25)
+        mat.uniforms.uColorMid.value.copy(colors.mid).lerp(themeAccent, 0.2)
+        mat.uniforms.uColorTop.value.copy(colors.top).lerp(themeAccent, 0.15)
+      }
+
+      // Update glow mesh to match bar position and softly envelope it
+      const glow = glowMeshesRef.current[idx]
+      if (glow) {
+        glow.position.copy(mesh.position)
+        glow.scale.set(
+          (0.15 + freq * 0.08) * 2.2,
+          height * 1.15,
+          (0.15 + freq * 0.08) * 2.2
+        )
+        glow.lookAt(0, glow.position.y, 0)
+
+        const glowMat = glowMatsRef.current[idx]
+        if (glowMat) {
+          glowMat.opacity = 0.04 + freq * 0.12
+          // Glow uses the mid gradient color for a soft bloom
+          const glowColor = barColors[idx].mid.clone().lerp(new THREE.Color(theme.accent), 0.3)
+          glowMat.color.copy(glowColor)
+        }
       }
     })
 
@@ -614,28 +742,30 @@ function SymmetricBars({
     }
   })
 
-  const primaryColor = useMemo(() => new THREE.Color(theme.primary), [theme.primary])
-  const accentColor = useMemo(() => new THREE.Color(theme.accent), [theme.accent])
-
   return (
     <group ref={groupRef}>
-      {barData.map((_, idx) => {
-        const t = (idx % count) / count
-        const color = new THREE.Color().lerpColors(primaryColor, accentColor, t)
-        return (
-          <mesh key={idx} ref={(el) => { if (el) meshesRef.current[idx] = el }}>
+      {barData.map((_, idx) => (
+        <React.Fragment key={idx}>
+          {/* Main gradient bar */}
+          <mesh ref={(el) => { if (el) meshesRef.current[idx] = el }}>
             <boxGeometry args={[1, 1, 1]} />
-            <meshStandardMaterial
-              ref={(el) => { if (el) materialsRef.current[idx] = el }}
-              color={color}
-              metalness={0.7}
-              roughness={0.15}
-              emissive={color}
-              emissiveIntensity={0.3}
+            {/* @ts-ignore */}
+            <gradientBarShaderMaterial ref={(el: GradientBarShaderMaterial | null) => { if (el) shaderMatsRef.current[idx] = el }} />
+          </mesh>
+          {/* Soft glow envelope around bar */}
+          <mesh ref={(el) => { if (el) glowMeshesRef.current[idx] = el }}>
+            <boxGeometry args={[1, 1, 1]} />
+            <meshBasicMaterial
+              ref={(el) => { if (el) glowMatsRef.current[idx] = el }}
+              color="#c471ec"
+              transparent
+              opacity={0.06}
+              blending={THREE.AdditiveBlending}
+              depthWrite={false}
             />
           </mesh>
-        )
-      })}
+        </React.Fragment>
+      ))}
     </group>
   )
 }
@@ -1015,6 +1145,7 @@ export default function AudioVisualizer() {
 
   return (
     <div className="w-full h-screen relative overflow-hidden bg-[#030306]">
+      <div className="absolute inset-0" style={{ animation: "visualizer-hue-rotate 8s linear infinite" }}>
       <Canvas
         camera={{ position: [0, 4, 10], fov: 60 }}
         gl={{ antialias: false, powerPreference: "default", alpha: false }}
@@ -1022,6 +1153,7 @@ export default function AudioVisualizer() {
       >
         <Scene analyzerData={analyzerData} mousePos={mousePos} theme={theme} />
       </Canvas>
+      </div>
 
       {/* Error message */}
       {error && showErrorTimeout && (
